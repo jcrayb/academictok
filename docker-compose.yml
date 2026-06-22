@@ -39,7 +39,9 @@ services:
       - admin_emails
     volumes:
       - /home/chris/github/academictok/data:/app/data           # sqlite DB + figures; persists across rebuilds
-    networks: [webhost]
+    networks:
+      webhost:
+        ipv4_address: 172.10.1.200
     read_only: true                # if something needs to write outside /tmp or the
     tmpfs: ["/tmp"]                 # volume, comment out read_only (or add a tmpfs)
     security_opt: ["no-new-privileges:true"]
@@ -66,7 +68,9 @@ services:
     depends_on:
       academictok-backend:
         condition: service_healthy
-    networks: [webhost]
+    networks:
+      webhost:
+        ipv4_address: 172.10.1.201
     security_opt: ["no-new-privileges:true"]
     mem_limit: 512m
     cpus: "1.0"
