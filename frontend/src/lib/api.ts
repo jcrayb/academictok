@@ -56,7 +56,7 @@ export interface PaperImage {
 }
 
 export interface PaperDetail extends Omit<FeedItem, "field"> {
-  fields: { slug: string; name: string }[];
+  fields: { slug: string; name: string; is_primary: boolean }[];
   abstract: string | null;
   long_body: string | null;
   pdf_url: string | null;
@@ -168,14 +168,18 @@ export async function unsubscribe(slug: string) {
 // ── Feed ──────────────────────────────────────────────────────────────────────
 
 export interface MixedCursor {
-  sub_before_id?: number | null;
-  other_before_id?: number | null;
+  sub_offset?: number;
+  other_offset?: number;
 }
 
-export async function getMixedFeed(cursor: MixedCursor = {}, pageSize = 20) {
-  const params = new URLSearchParams({ mode: "mixed", page_size: String(pageSize) });
-  if (cursor.sub_before_id != null) params.set("sub_before_id", String(cursor.sub_before_id));
-  if (cursor.other_before_id != null) params.set("other_before_id", String(cursor.other_before_id));
+export async function getMixedFeed(
+  cursor: MixedCursor = {}, sort: FieldSort = "random", seed = 0, pageSize = 20,
+) {
+  const params = new URLSearchParams({
+    mode: "mixed", page_size: String(pageSize), sort, seed: String(seed),
+  });
+  if (cursor.sub_offset != null) params.set("sub_offset", String(cursor.sub_offset));
+  if (cursor.other_offset != null) params.set("other_offset", String(cursor.other_offset));
 
   // Attach auth when signed in so the mix is weighted toward subscriptions.
   let headers: Record<string, string> = {};
@@ -187,14 +191,18 @@ export async function getMixedFeed(cursor: MixedCursor = {}, pageSize = 20) {
   return apiFetch(`/api/feed?${params.toString()}`, { headers });
 }
 
-export async function getSubscribedFeed(beforeId?: number | null, pageSize = 20) {
+export async function getSubscribedFeed(
+  offset = 0, sort: FieldSort = "random", seed = 0, pageSize = 20,
+) {
   const { headers, uid } = await authParams();
   const params = new URLSearchParams({
     mode: "subscribed",
     page_size: String(pageSize),
+    offset: String(offset),
+    sort,
+    seed: String(seed),
     uid,
   });
-  if (beforeId != null) params.set("before_id", String(beforeId));
   return apiFetch(`/api/feed?${params.toString()}`, { headers });
 }
 

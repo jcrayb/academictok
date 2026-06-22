@@ -20,9 +20,18 @@ import NavBar from "../components/NavBar.astro";
         class="absolute left-0 right-0 top-full z-20 mt-1 hidden max-h-[60vh] overflow-y-auto rounded-lg border-1 border-accent bg-card shadow-lg"
       ></div>
     </div>
-    <div class="mb-2 flex gap-[0.6rem]">
-      <button id="mode-discover" class="primary">Discover</button>
-      <button id="mode-subscribed">Subscribed</button>
+    <div class="mb-2 flex items-center justify-between gap-[0.6rem]">
+      <div class="flex gap-[0.6rem]">
+        <button id="mode-discover" class="primary">Discover</button>
+        <button id="mode-subscribed">Subscribed</button>
+      </div>
+      <label class="flex items-center gap-[0.4rem] text-[0.85rem] text-muted">Sort
+        <select id="sort" class="rounded-lg border border-border bg-bg p-1 text-text">
+          <option value="random">Random</option>
+          <option value="citation">Most cited</option>
+          <option value="year">Newest</option>
+        </select>
+      </label>
     </div>
     <p id="hint" class="my-[0.2rem] min-h-[1.2rem] text-[0.9rem] text-accent"></p>
     <div id="feed" class="flex flex-col gap-4"></div>
@@ -35,7 +44,7 @@ import NavBar from "../components/NavBar.astro";
   import { $user, $loading } from "../stores/auth";
   import {
     getMixedFeed, getSubscribedFeed, getSubscriptions, getFields,
-    type FeedItem, type MixedCursor, type Field,
+    type FeedItem, type MixedCursor, type Field, type FieldSort,
   } from "../lib/api";
   import { createCard, fieldHref, type CardCtx } from "../lib/card";
 
@@ -45,6 +54,7 @@ import NavBar from "../components/NavBar.astro";
   const sentinel = document.getElementById("sentinel")!;
   const discoverBtn = document.getElementById("mode-discover") as HTMLButtonElement;
   const subBtn = document.getElementById("mode-subscribed") as HTMLButtonElement;
+  const sortSel = document.getElementById("sort") as HTMLSelectElement;
   const fieldSearchInput = document.getElementById("field-search") as HTMLInputElement;
   const fieldSearchResults = document.getElementById("field-search-results")!;
 
@@ -52,7 +62,10 @@ import NavBar from "../components/NavBar.astro";
   let loadingPage = false;
   let exhausted = false;
   let mixedCursor: MixedCursor = {};
-  let subCursor: number | null | undefined = undefined;
+  let subOffset = 0;
+  let sort: FieldSort = "random";
+  // A per-run seed keeps the random order stable across paginated requests.
+  let seed = Math.floor(Math.random() * 1e9);
   let subscribedSlugs = new Set<string>();
   const seen = new Set<number>();
 
@@ -68,7 +81,8 @@ import NavBar from "../components/NavBar.astro";
     loadingPage = false;
     exhausted = false;
     mixedCursor = {};
-    subCursor = undefined;
+    subOffset = 0;
+    seed = Math.floor(Math.random() * 1e9);
     seen.clear();
   }
 
@@ -98,16 +112,16 @@ import NavBar from "../components/NavBar.astro";
     statusEl.textContent = "Loading…";
     try {
       if (mode === "subscribed") {
-        const data = await getSubscribedFeed(subCursor);
+        const data = await getSubscribedFeed(subOffset, sort, seed);
         appendItems(data.items);
-        subCursor = data.next_before_id;
+        subOffset = data.next_offset;
         if (!data.items.length) exhausted = true;
       } else {
-        const data = await getMixedFeed(mixedCursor);
+        const data = await getMixedFeed(mixedCursor, sort, seed);
         appendItems(data.items);
         mixedCursor = {
-          sub_before_id: data.next_sub_before_id,
-          other_before_id: data.next_other_before_id,
+          sub_offset: data.next_sub_offset,
+          other_offset: data.next_other_offset,
         };
         if (data.exhausted || !data.items.length) exhausted = true;
       }
@@ -136,6 +150,11 @@ import NavBar from "../components/NavBar.astro";
 
   discoverBtn.onclick = () => switchMode("discover");
   subBtn.onclick = () => switchMode("subscribed");
+  sortSel.onchange = () => {
+    sort = sortSel.value as FieldSort;
+    reset();
+    loadMore();
+  };
 
   // ── Field search overlay ──────────────────────────────────────────────────
   // Absolutely positioned over the page (see the .relative wrapper in the

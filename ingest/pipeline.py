@@ -475,6 +475,86 @@ def backfill_secondary_fields(limit=50, after_id=0, force=False):
     return len(rows), last_id
 
 
+def reclassify_primary_fields(limit=50, after_id=0, on_paper=None, sensitivity=None):
+    """Re-run the full primary-field classifier (with permission to create new
+    fields) over every paper, replacing its primary AND secondary field links
+    with a fresh decision. Useful after tuning the classifier's bar for
+    creating new fields, so older papers that were shoehorned into a loosely-
+    fitting existing field can move to a better (possibly new) one — secondary
+    fields keep them discoverable under the old field too, when relevant.
+
+    ``sensitivity`` overrides config.NEW_FIELD_SENSITIVITY for this run (0.0 =
+    never create a new field, 1.0 = create one liberally).
+
+    ``on_paper(info)`` is called after each paper with a dict: paper_id, title,
+    old_primary_slug, new_field_slug, new_field_name, created_new,
+    secondary_slugs — so a caller can print/log progress live.
+
+    Returns (processed_count, last_paper_id) so a long-running pass can page
+    forward via ``after_id``.
+    """
+    with get_conn() as conn:
+        rows = models.papers_for_reclassify(conn, limit, after_id=after_id)
+
+    last_id = after_id
+    for row in rows:
+        last_id = row["paper_id"]
+        paper = {"title": row["title"]}
+        summary = {"body": row["summary_body"]}
+        with get_conn() as conn:
+            # Re-read the field list each time: earlier papers in this same
+            # pass may have just created fields later ones should reuse.
+            fields = models.fields_for_classifier(conn)
+        try:
+            decision = classify(paper, summary, fields, model=config.OLLAMA_MODEL or None,
+                                 sensitivity=sensitivity)
+        except Exception as e:  # noqa: BLE001 - skip the dud, keep the batch
+            logger.warning("Reclassify failed for paper %s: %s", row["paper_id"], e)
+            continue
+
+        with get_conn() as conn:
+            created_new = False
+            if "field_slug" in decision:
+                field = models.get_field_by_slug(conn, decision["field_slug"])
+                field_id, field_slug, field_name = field["id"], field["slug"], field["name"]
+            else:
+                created_new = True
+                nf = decision["new_field"]
+                field_id = models.create_field(
+                    conn, nf["slug"], nf["name"], nf["description"], is_seed=0,
+                    keywords=nf.get("keywords"),
+                )
+                field_slug, field_name = nf["slug"], nf["name"]
+                logger.info("Created new field: %s", nf["name"])
+
+            models.clear_paper_fields(conn, row["paper_id"])
+            models.link_paper_field(conn, row["paper_id"], field_id, is_primary=1)
+            secondary_ids, secondary_slugs = [], []
+            for sslug in decision.get("secondary_slugs", []):
+                sf = models.get_field_by_slug(conn, sslug)
+                if sf and sf["id"] != field_id:
+                    models.link_paper_field(conn, row["paper_id"], sf["id"], is_primary=0)
+                    secondary_ids.append(sf["id"])
+                    secondary_slugs.append(sslug)
+            models.log_ingest(
+                conn, "reclassify_primary_fields", None, "reclassified",
+                detail=f"paper_id={row['paper_id']}, "
+                       f"old_primary={row['primary_slug']}, new_field_id={field_id}, "
+                       f"created_new={created_new}, secondary={secondary_ids}",
+            )
+        if on_paper:
+            on_paper({
+                "paper_id": row["paper_id"],
+                "title": row["title"],
+                "old_primary_slug": row["primary_slug"],
+                "new_field_slug": field_slug,
+                "new_field_name": field_name,
+                "created_new": created_new,
+                "secondary_slugs": secondary_slugs,
+            })
+    return len(rows), last_id
+
+
 def backfill_field_keywords(limit=50, after_id=0, force=False):
     """Generate search keywords for fields. By default only fields that lack
     them (seed fields, older classifier-created fields); ``force=True``

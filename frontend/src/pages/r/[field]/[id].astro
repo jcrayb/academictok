@@ -75,11 +75,22 @@ const { field } = Astro.params;
     try { await (window as any).MathJax?.typesetPromise([el]); } catch {}
   }
 
+  function fieldLink(f: { slug: string }) {
+    return `<a href="${fieldHref(f.slug)}" class="text-[0.85rem] font-semibold text-accent no-underline">r/${f.slug}</a>`;
+  }
+
   function render(p: PaperDetail) {
     document.title = `${p.summary_title} · AcademicTok`;
-    const fields = (p.fields || [])
-      .map((f) => `<a href="${fieldHref(f.slug)}" class="text-[0.85rem] font-semibold text-accent no-underline">r/${f.slug}</a>`)
-      .join(" ");
+    const all = p.fields || [];
+    const primary = all.find((f) => f.is_primary) || all[0];
+    const secondary = all.filter((f) => f !== primary);
+    const fields = `
+      ${primary ? `<div class="flex flex-wrap gap-2">${fieldLink(primary)}</div>` : ""}
+      ${secondary.length ? `
+        <div class="mt-1 flex flex-wrap items-center gap-2 text-[0.85rem] text-muted">
+          <span>Cross-posted to:</span>
+          ${secondary.map(fieldLink).join(" ")}
+        </div>` : ""}`;
     // Show the detailed summary once it's ready; until then the short summary,
     // with a note while it's still being generated in the background.
     const generating = !p.long_body && p.enriching
@@ -89,7 +100,7 @@ const { field } = Astro.params;
       ? `<h2 class="${H2}">Detailed summary</h2><div>${paragraphs(p.long_body)}</div>`
       : `<h2 class="${H2}">Summary</h2><div>${paragraphs(p.summary_body)}</div>${generating}`;
     root.innerHTML = `
-      <div class="flex flex-wrap gap-2">${fields}</div>
+      ${fields}
       <h1 class="mt-[0.4rem] mb-[0.6rem] text-[1.7rem] leading-[1.25]">${escapeHtml(p.summary_title)}</h1>
       <div class="mt-[0.6rem] mb-[1.4rem] border-l-[3px] border-border pl-[0.9rem]">
         <div class="font-semibold">${escapeHtml(p.paper_title)}</div>

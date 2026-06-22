@@ -1,7 +1,8 @@
 @import "tailwindcss";
 
-/* Dark-theme palette exposed as Tailwind color utilities: bg-card, text-muted,
-   border-border, text-accent, etc. (mirrors the old CSS custom properties). */
+/* Dark-theme palette (the default) exposed as Tailwind color utilities:
+   bg-card, text-muted, border-border, text-accent, etc. (mirrors the old CSS
+   custom properties). Overridden for light mode below via [data-theme]. */
 @theme {
   --color-bg: #0f1115;
   --color-card: #1a1d24;
@@ -12,6 +13,21 @@
   --color-accent-dim: #3a2030;
   --color-ok: #6ee7a0;
   --color-bad: #ffb3c0;
+}
+
+/* Light-theme palette. Toggled by setting data-theme="light" on <html> (see
+   src/lib/theme.ts); persisted in localStorage and applied before first paint
+   by the inline script in Base.astro to avoid a flash of the wrong theme. */
+html[data-theme="light"] {
+  --color-bg: #f5f6f8;
+  --color-card: #ffffff;
+  --color-border: #dfe2e8;
+  --color-text: #14161a;
+  --color-muted: #5b6270;
+  --color-accent: #e0394f;
+  --color-accent-dim: #ffe1e6;
+  --color-ok: #1f9d55;
+  --color-bad: #c81e3a;
 }
 
 @layer base {

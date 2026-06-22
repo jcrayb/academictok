@@ -1,17 +1,18 @@
 """Classify a paper into an existing field or propose a new one, via the LLM."""
 import logging
 
+import config
 from ingest.ollama_client import generate_json
 from seeds import slugify
 
 logger = logging.getLogger(__name__)
 
 SYSTEM = (
-    "You assign academic papers to research fields (like subreddits). You "
-    "strongly prefer assigning a paper to an existing field. You only propose a "
-    "new field when the paper genuinely does not belong to any existing one. You "
-    "also list any other existing fields the paper clearly fits, so it shows up "
-    "in each of them."
+    "You assign academic papers to research fields (like subreddits). Secondary "
+    "fields exist precisely so a paper can still surface under a related "
+    "existing field even when its primary is a new, more specific one. You also "
+    "list any other existing fields the paper clearly fits, so it shows up in "
+    "each of them."
 )
 
 PROMPT = """Assign this paper to a primary research field, and list any other \
@@ -24,19 +25,22 @@ Existing fields (slug — name: description):
 {field_list}
 
 Rules:
-- Choose ONE primary field: STRONGLY prefer an existing field. Only create a new \
-field if none reasonably fits.
+- Choose ONE primary field, existing or new.
+{sensitivity_rule}
 - A new field should be a broad research area (like "Stochastic Optimization"), \
-not a narrow paper-specific topic.
+not a narrow paper-specific topic. Never create a new field that's just a \
+narrower variant of an existing one (e.g. "organic-zinc-battery-chemistry" when \
+"battery-chemistry" already exists) — reuse the broader existing field instead.
 - "also_fields" is a list of OTHER existing field slugs (from the list above) the \
-paper genuinely also fits — interdisciplinary papers belong to several. Use [] \
-when the paper fits only its primary field. Never invent slugs here and never \
-repeat the primary field.
+paper genuinely also fits — interdisciplinary papers belong to several, and this \
+is also how a paper with a new primary field still surfaces under a related \
+existing field. Use [] when the paper fits only its primary field. Never invent \
+slugs here and never repeat the primary field.
 
 Return a JSON object:
-- If the primary is an existing field: {{"field_slug": "<existing-slug>", \
+- If an existing field is the best fit: {{"field_slug": "<existing-slug>", \
 "also_fields": ["<existing-slug>", ...]}}
-- If a new primary field is needed: {{"new_field": {{"name": "<Field Name>", \
+- If a new field is the best fit: {{"new_field": {{"name": "<Field Name>", \
 "description": "<one sentence>", "keywords": ["<keyword>", ...]}}, \
 "also_fields": ["<existing-slug>", ...]}}
   "keywords" is 5-10 lowercase search terms (synonyms, abbreviations, related \
@@ -65,16 +69,59 @@ def _keywords(new_field_result):
     return [k.strip().lower() for k in raw if isinstance(k, str) and k.strip()]
 
 
-def classify(paper: dict, summary: dict, fields: list) -> dict:
+def _sensitivity_rule(sensitivity: float) -> str:
+    """Turn a 0.0-1.0 new-field sensitivity into a natural-language rule for
+    the prompt. 0 = never create a new field; 1 = create one liberally."""
+    if sensitivity <= 0.0:
+        return (
+            "- NEVER create a new field. Always choose whichever existing field "
+            "is the closest match, even if the fit feels loose or only partial."
+        )
+    if sensitivity <= 0.25:
+        return (
+            "- Be very reluctant to create a new field. Only do it when the "
+            "paper's research area is clearly missing from the existing list "
+            "entirely — not just narrower or more specific than an existing "
+            "field. When in doubt, reuse the closest existing (broader) field."
+        )
+    if sensitivity <= 0.5:
+        return (
+            "- Strongly prefer an existing field. Only create a new one when no "
+            "existing field reasonably covers the paper's research area — a "
+            "paper being a narrower sub-topic of an existing field is NOT enough "
+            "reason to create a new one; reuse the broader existing field instead."
+        )
+    if sensitivity <= 0.75:
+        return (
+            "- Choose whichever — existing or new — most accurately describes "
+            "the paper's actual research area. Don't force-fit an existing field "
+            "that's only a loose or adjacent match just to avoid creating a new "
+            "one, but don't split off a new field for a minor variant of an "
+            "existing one either."
+        )
+    return (
+        "- Prefer precision: create a new field whenever an existing field is "
+        "only an approximate or adjacent match, even if it's a fairly narrow "
+        "sub-area, rather than reusing a broader existing field."
+    )
+
+
+def classify(paper: dict, summary: dict, fields: list, model: str | None = None,
+             sensitivity: float | None = None) -> dict:
     """Decide the field(s) for a paper.
 
     `fields` is a list of dicts with keys: slug, name, description.
+    ``model`` overrides config.OLLAMA_MODEL (e.g. the fast model for bulk
+    reclassification). ``sensitivity`` overrides config.NEW_FIELD_SENSITIVITY
+    (0.0 = never create a new field, 1.0 = create one liberally).
     Returns a dict with a primary assignment plus ``secondary_slugs`` (existing
     fields the paper also fits, possibly empty):
       - {"field_slug": slug, "secondary_slugs": [...]} for an existing primary, or
       - {"new_field": {"slug", "name", "description", "keywords"},
          "secondary_slugs": [...]}.
     """
+    if sensitivity is None:
+        sensitivity = config.NEW_FIELD_SENSITIVITY
     field_list = "\n".join(
         f"- {f['slug']} — {f['name']}: {f.get('description') or ''}" for f in fields
     )
@@ -82,8 +129,9 @@ def classify(paper: dict, summary: dict, fields: list) -> dict:
         title=paper["title"],
         summary=summary["body"],
         field_list=field_list or "(none yet)",
+        sensitivity_rule=_sensitivity_rule(sensitivity),
     )
-    result = generate_json(prompt, system=SYSTEM, temperature=0.1)
+    result = generate_json(prompt, system=SYSTEM, temperature=0.1, model=model)
 
     existing_slugs = {f["slug"] for f in fields}
 

@@ -9,6 +9,13 @@ const { title = "AcademicTok", useMath = false } = Astro.props;
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title}</title>
+    {/* Applied before first paint so there's no flash of the wrong theme. */}
+    <script is:inline>
+      (function () {
+        var t = localStorage.getItem("theme");
+        document.documentElement.setAttribute("data-theme", t === "light" ? "light" : "dark");
+      })();
+    </script>
     {useMath && <script id="MathJax-script" src="/mathjax/tex-chtml.js" is:inline />}
   </head>
   <body>

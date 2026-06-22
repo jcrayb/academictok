@@ -6,6 +6,12 @@
   <div class="flex items-center gap-4">
     <a href="/fields" class="text-muted no-underline">Fields</a>
     <a href="/admin" id="nav-admin" class="text-muted no-underline" hidden>Admin</a>
+    <button
+      id="theme-toggle"
+      type="button"
+      aria-label="Toggle dark/light theme"
+      class="!border-0 !bg-transparent !p-1 text-[1.1rem] leading-none"
+    ></button>
     <span id="nav-auth" class="inline-flex items-center gap-[0.6rem]"></span>
   </div>
 </nav>
@@ -14,9 +20,18 @@
   import { $user, $loading } from "../stores/auth";
   import { signInWithGoogle, signOut } from "../lib/firebase";
   import { verifyUser, adminCheck } from "../lib/api";
+  import { getTheme, toggleTheme } from "../lib/theme";
 
   const slot = document.getElementById("nav-auth")!;
   const adminLink = document.getElementById("nav-admin") as HTMLAnchorElement;
+  const themeBtn = document.getElementById("theme-toggle") as HTMLButtonElement;
+
+  function renderThemeBtn(theme: string) {
+    themeBtn.textContent = theme === "light" ? "🌙" : "☀️";
+    themeBtn.title = theme === "light" ? "Switch to dark theme" : "Switch to light theme";
+  }
+  renderThemeBtn(getTheme());
+  themeBtn.onclick = () => renderThemeBtn(toggleTheme());
 
   async function refreshAdminLink() {
     let ok = false;
