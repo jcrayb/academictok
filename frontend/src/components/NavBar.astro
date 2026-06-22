@@ -1,0 +1,56 @@
+---
+// Auth-aware navigation bar. Hydrated by the inline script below.
+---
+<nav class="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-bg px-[1.2rem] py-[0.8rem]">
+  <a href="/" class="text-[1.2rem] font-extrabold text-text no-underline">academic<span class="text-accent">tok</span></a>
+  <div class="flex items-center gap-4">
+    <a href="/fields" class="text-muted no-underline">Fields</a>
+    <a href="/admin" id="nav-admin" class="text-muted no-underline" hidden>Admin</a>
+    <span id="nav-auth" class="inline-flex items-center gap-[0.6rem]"></span>
+  </div>
+</nav>
+
+<script>
+  import { $user, $loading } from "../stores/auth";
+  import { signInWithGoogle, signOut } from "../lib/firebase";
+  import { verifyUser, adminCheck } from "../lib/api";
+
+  const slot = document.getElementById("nav-auth")!;
+  const adminLink = document.getElementById("nav-admin") as HTMLAnchorElement;
+
+  async function refreshAdminLink() {
+    let ok = false;
+    if ($user.get()) {
+      try { ok = await adminCheck(); } catch { ok = false; }
+    }
+    adminLink.hidden = !ok;
+  }
+
+  function render() {
+    if ($loading.get()) { slot.textContent = "…"; return; }
+    const user = $user.get();
+    refreshAdminLink();
+    slot.innerHTML = "";
+    if (user) {
+      const name = document.createElement("span");
+      name.className = "text-muted text-[0.9rem]";
+      name.textContent = user.displayName || user.email || "signed in";
+      const out = document.createElement("button");
+      out.textContent = "Sign out";
+      out.onclick = () => signOut();
+      slot.append(name, out);
+    } else {
+      const inb = document.createElement("button");
+      inb.className = "primary";
+      inb.textContent = "Sign in with Google";
+      inb.onclick = async () => {
+        await signInWithGoogle();
+        try { await verifyUser(); } catch (e) { console.error(e); }
+      };
+      slot.append(inb);
+    }
+  }
+
+  $loading.subscribe(render);
+  $user.subscribe(render);
+</script>

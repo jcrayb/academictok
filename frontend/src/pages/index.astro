@@ -1,0 +1,211 @@
+---
+import Base from "../layouts/Base.astro";
+import NavBar from "../components/NavBar.astro";
+---
+
+<Base title="AcademicTok">
+  <NavBar />
+
+  <main class="mx-auto max-w-[640px] p-4">
+    <div class="relative mb-3">
+      <input
+        id="field-search"
+        type="search"
+        placeholder="Search fields by keyword…"
+        autocomplete="off"
+        class="w-full rounded-lg border border-border bg-card px-3 py-2 text-[0.95rem] text-text outline-none focus:border-accent"
+      />
+      <div
+        id="field-search-results"
+        class="absolute left-0 right-0 top-full z-20 mt-1 hidden max-h-[60vh] overflow-y-auto rounded-lg border-1 border-accent bg-card shadow-lg"
+      ></div>
+    </div>
+    <div class="mb-2 flex gap-[0.6rem]">
+      <button id="mode-discover" class="primary">Discover</button>
+      <button id="mode-subscribed">Subscribed</button>
+    </div>
+    <p id="hint" class="my-[0.2rem] min-h-[1.2rem] text-[0.9rem] text-accent"></p>
+    <div id="feed" class="flex flex-col gap-4"></div>
+    <div id="sentinel" class="h-px"></div>
+    <p id="status" class="p-4 text-center text-muted"></p>
+  </main>
+</Base>
+
+<script>
+  import { $user, $loading } from "../stores/auth";
+  import {
+    getMixedFeed, getSubscribedFeed, getSubscriptions, getFields,
+    type FeedItem, type MixedCursor, type Field,
+  } from "../lib/api";
+  import { createCard, fieldHref, type CardCtx } from "../lib/card";
+
+  const feedEl = document.getElementById("feed")!;
+  const statusEl = document.getElementById("status")!;
+  const hintEl = document.getElementById("hint")!;
+  const sentinel = document.getElementById("sentinel")!;
+  const discoverBtn = document.getElementById("mode-discover") as HTMLButtonElement;
+  const subBtn = document.getElementById("mode-subscribed") as HTMLButtonElement;
+  const fieldSearchInput = document.getElementById("field-search") as HTMLInputElement;
+  const fieldSearchResults = document.getElementById("field-search-results")!;
+
+  let mode: "discover" | "subscribed" = "discover";
+  let loadingPage = false;
+  let exhausted = false;
+  let mixedCursor: MixedCursor = {};
+  let subCursor: number | null | undefined = undefined;
+  let subscribedSlugs = new Set<string>();
+  const seen = new Set<number>();
+
+  const cardCtx: CardCtx = {
+    subscribedSlugs,
+    signedIn: () => !!$user.get(),
+    onNeedLogin: () => { hintEl.textContent = "Sign in to subscribe to fields."; },
+  };
+
+  function reset() {
+    feedEl.innerHTML = "";
+    statusEl.textContent = "";
+    loadingPage = false;
+    exhausted = false;
+    mixedCursor = {};
+    subCursor = undefined;
+    seen.clear();
+  }
+
+  async function refreshSubscriptions() {
+    subscribedSlugs.clear();
+    if (!$user.get()) return;
+    try {
+      const { subscriptions } = await getSubscriptions();
+      subscriptions.forEach((s) => subscribedSlugs.add(s.slug));
+    } catch (e) { console.error(e); }
+  }
+
+  function appendItems(items: FeedItem[]) {
+    let added = 0;
+    for (const it of items) {
+      if (seen.has(it.paper_id)) continue;
+      seen.add(it.paper_id);
+      feedEl.appendChild(createCard(it, cardCtx));
+      added++;
+    }
+    return added;
+  }
+
+  async function loadMore() {
+    if (loadingPage || exhausted) return;
+    loadingPage = true;
+    statusEl.textContent = "Loading…";
+    try {
+      if (mode === "subscribed") {
+        const data = await getSubscribedFeed(subCursor);
+        appendItems(data.items);
+        subCursor = data.next_before_id;
+        if (!data.items.length) exhausted = true;
+      } else {
+        const data = await getMixedFeed(mixedCursor);
+        appendItems(data.items);
+        mixedCursor = {
+          sub_before_id: data.next_sub_before_id,
+          other_before_id: data.next_other_before_id,
+        };
+        if (data.exhausted || !data.items.length) exhausted = true;
+      }
+      statusEl.textContent = exhausted
+        ? (feedEl.children.length ? "You're all caught up." : "Nothing here yet.")
+        : "";
+    } catch (e) {
+      console.error(e);
+      statusEl.textContent = "Failed to load feed.";
+    }
+    loadingPage = false;
+  }
+
+  async function switchMode(next: "discover" | "subscribed") {
+    if (next === "subscribed" && !$user.get()) {
+      hintEl.textContent = "Sign in to see your subscribed feed.";
+      return;
+    }
+    mode = next;
+    hintEl.textContent = "";
+    discoverBtn.classList.toggle("primary", next === "discover");
+    subBtn.classList.toggle("primary", next === "subscribed");
+    reset();
+    await loadMore();
+  }
+
+  discoverBtn.onclick = () => switchMode("discover");
+  subBtn.onclick = () => switchMode("subscribed");
+
+  // ── Field search overlay ──────────────────────────────────────────────────
+  // Absolutely positioned over the page (see the .relative wrapper in the
+  // markup), so showing/hiding results never shifts the feed below it.
+
+  function escapeHtml(s: string) {
+    return (s ?? "").replace(/[&<>"']/g, (c) => (
+      { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!
+    ));
+  }
+
+  function renderFieldResults(fields: Field[]) {
+    if (!fields.length) {
+      fieldSearchResults.innerHTML =
+        '<p class="p-3 text-[0.85rem] text-muted">No fields match.</p>';
+      fieldSearchResults.classList.remove("hidden");
+      return;
+    }
+    fieldSearchResults.innerHTML = fields.map((f) => `
+      <a href="${fieldHref(f.slug)}" class="block border-b border-border p-3 no-underline last:border-b-0 hover:bg-bg">
+        <div class="text-[0.95rem] font-semibold text-text">${escapeHtml(f.name)}</div>
+        <div class="mt-[0.15rem] text-[0.82rem] text-muted">${escapeHtml(f.description ?? "")}</div>
+      </a>`).join("");
+    fieldSearchResults.classList.remove("hidden");
+  }
+
+  function hideFieldResults() {
+    fieldSearchResults.classList.add("hidden");
+  }
+
+  let fieldSearchTimer: ReturnType<typeof setTimeout>;
+  fieldSearchInput.addEventListener("input", () => {
+    clearTimeout(fieldSearchTimer);
+    const q = fieldSearchInput.value.trim();
+    if (!q) { hideFieldResults(); return; }
+    fieldSearchTimer = setTimeout(async () => {
+      try {
+        const { fields } = await getFields(q);
+        renderFieldResults(fields);
+      } catch (e) { console.error(e); }
+    }, 200);
+  });
+
+  fieldSearchInput.addEventListener("focus", () => {
+    if (fieldSearchInput.value.trim()) fieldSearchResults.classList.remove("hidden");
+  });
+
+  // Close when clicking outside the search box / results.
+  document.addEventListener("click", (e) => {
+    const t = e.target as Node;
+    if (!fieldSearchInput.contains(t) && !fieldSearchResults.contains(t)) hideFieldResults();
+  });
+  fieldSearchInput.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { hideFieldResults(); fieldSearchInput.blur(); }
+  });
+
+  new IntersectionObserver((entries) => {
+    if (entries[0].isIntersecting) loadMore();
+  }, { rootMargin: "400px" }).observe(sentinel);
+
+  // Boot once auth state resolves; reload when the user signs in/out.
+  let booted = false;
+  $loading.subscribe(async (loading) => {
+    if (loading) return;
+    await refreshSubscriptions();
+    if (!booted) { booted = true; reset(); await loadMore(); }
+  });
+  $user.subscribe(async () => {
+    if ($loading.get()) return;
+    await refreshSubscriptions();
+    await switchMode("discover");
+  });
+</script>

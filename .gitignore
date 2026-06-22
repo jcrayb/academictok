@@ -1,0 +1,38 @@
+# Secrets
+.env
+frontend/.env
+authkey.json
+SEMANTIC_SCHOLAR_KEY
+admin_emails
+secrets/
+firebase_config
+
+# Python virtualenv at repo root. Anchored with a leading slash so the bare
+# `lib` pattern doesn't also ignore frontend/src/lib/ (which broke Tailwind's
+# .gitignore-aware content scanning, dropping the feed-card styles).
+/bin
+/include
+/lib
+/lib64
+.claude
+
+# Database
+*.db
+*.db-journal
+
+# Local watermark for scripts/ollama_sync_run.sh
+.sync_state.json
+
+# Generated media (figures extracted from PDFs; regenerated on ingest)
+media/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.astro/

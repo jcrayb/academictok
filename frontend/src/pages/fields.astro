@@ -1,0 +1,114 @@
+---
+import Base from "../layouts/Base.astro";
+import NavBar from "../components/NavBar.astro";
+---
+
+<Base title="Fields · AcademicTok">
+  <NavBar />
+  <main class="mx-auto max-w-[760px] p-4">
+    <h1>Fields</h1>
+    <input
+      id="search"
+      type="search"
+      placeholder="Search fields by keyword…"
+      class="mb-4 w-full rounded-lg border border-border bg-card px-3 py-2 text-[0.95rem] text-text outline-none focus:border-accent"
+    />
+    <p class="min-h-[1.2rem] text-accent" id="hint"></p>
+    <div id="fields" class="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-4"></div>
+  </main>
+</Base>
+
+<script>
+  import { $user, $loading } from "../stores/auth";
+  import { getFields, getSubscriptions, subscribe, unsubscribe, type Field } from "../lib/api";
+
+  const grid = document.getElementById("fields")!;
+  const hint = document.getElementById("hint")!;
+  const search = document.getElementById("search") as HTMLInputElement;
+  let subscribed = new Set<string>();
+  let signedInHint = "";
+
+  async function load() {
+    subscribed = new Set();
+    if ($user.get()) {
+      try {
+        const { subscriptions } = await getSubscriptions();
+        subscribed = new Set(subscriptions.map((s) => s.slug));
+      } catch (e) { console.error(e); }
+    } else {
+      signedInHint = "Sign in to subscribe to fields.";
+      hint.textContent = signedInHint;
+    }
+    await runSearch();
+  }
+
+  async function runSearch() {
+    const q = search.value.trim();
+    const { fields } = await getFields(q || undefined);
+    hint.textContent = q && fields.length === 0
+      ? `No fields match "${q}".`
+      : signedInHint;
+    render(fields);
+  }
+
+  let debounceTimer: ReturnType<typeof setTimeout>;
+  search.addEventListener("input", () => {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(runSearch, 200);
+  });
+
+  /** Subscribed fields first (stable sort keeps each group's own order),
+   * so a user's joined fields surface before browsing/searching the rest. */
+  function bubbleSubscribed(fields: Field[]) {
+    return [...fields].sort((a, b) => {
+      const as = subscribed.has(a.slug) ? 0 : 1;
+      const bs = subscribed.has(b.slug) ? 0 : 1;
+      return as - bs;
+    });
+  }
+
+  function render(fields: Field[]) {
+    grid.innerHTML = "";
+    for (const f of bubbleSubscribed(fields)) {
+      const on = subscribed.has(f.slug);
+      const href = `/r/${encodeURIComponent(f.slug)}`;
+      const el = document.createElement("article");
+      
+      el.className =
+        "group cursor-pointer rounded-xl border border-border bg-card p-4 " +
+        "transition-colors duration-150 hover:border-accent";
+      el.innerHTML = `
+        <div class="flex items-baseline justify-between">
+          <h2 class="m-0 text-[1.05rem]"><a class="text-text no-underline group-hover:text-accent" href="${href}">${f.name.split('-').map(word => word[0].toUpperCase() + word.slice(1)) .join(' ')}</a></h2>
+          <span class="text-[0.8rem] text-muted">${f.paper_count} posts</span>
+        </div>
+        <p class="min-h-[3.6em] text-[0.9rem] leading-[1.4] text-muted">${f.description ?? ""}</p>
+        <button class="sub ${on ? "" : "primary"}">${on ? "Subscribed ✓" : "Subscribe"}</button>`;
+        
+      // Whole card navigates to the field, except the subscribe button.
+      el.addEventListener("click", (e) => {
+        if ((e.target as HTMLElement).closest("button")) return;
+        location.href = href;
+      });
+
+      const btn = el.querySelector(".sub") as HTMLButtonElement;
+      btn.onclick = async () => {
+        if (!$user.get()) { hint.textContent = "Sign in to subscribe to fields."; return; }
+        btn.disabled = true;
+        try {
+          if (subscribed.has(f.slug)) { await unsubscribe(f.slug); subscribed.delete(f.slug); }
+          else { await subscribe(f.slug); subscribed.add(f.slug); }
+          const now = subscribed.has(f.slug);
+          btn.textContent = now ? "Subscribed ✓" : "Subscribe";
+          btn.classList.toggle("primary", !now);
+        } catch (e) { console.error(e); }
+        btn.disabled = false;
+      };
+      grid.appendChild(el);
+    }
+  }
+
+  let booted = false;
+  $loading.subscribe((l) => { if (!l && !booted) { booted = true; load(); } });
+  $user.subscribe(() => { if (!$loading.get()) load(); });
+</script>

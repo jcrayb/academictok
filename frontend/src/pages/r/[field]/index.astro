@@ -1,0 +1,207 @@
+---
+import Base from "../../../layouts/Base.astro";
+import NavBar from "../../../components/NavBar.astro";
+
+// Reddit-style field feed: /r/<field>. Rendered on demand (SSR); the field
+// slug comes from the path and the feed is fetched client-side.
+const { field } = Astro.params;
+---
+
+<Base title={`r/${field} · AcademicTok`}>
+  <NavBar />
+  <main class="mx-auto max-w-[640px] p-4">
+    <a href="/fields" class="mb-2 inline-block text-[0.9rem] text-muted no-underline">← All fields</a>
+    <div class="flex items-center gap-3">
+      <h1 id="field-name" class="m-0">{`r/${field}`}</h1>
+      <button id="join-btn" class="rounded-full px-[0.9rem] py-[0.25rem] text-[0.8rem] font-semibold primary">Join</button>
+    </div>
+    <p id="field-hint" class="min-h-[1.2rem] text-[0.9rem] text-accent font-semibold">{`r/${field}`}</p>
+    <div class="mb-3 flex items-center gap-4 text-[0.85rem]">
+      <label class="flex items-center gap-[0.4rem] text-muted">Sort
+        <select id="sort" class="rounded-lg border border-border bg-bg p-1 text-text">
+          <option value="random">Random</option>
+          <option value="citation">Most cited</option>
+          <option value="year">Newest</option>
+        </select>
+      </label>
+      <label id="hide-seen-label" class="flex items-center gap-[0.4rem] text-muted" hidden>
+        <input type="checkbox" id="hide-seen" /> Hide seen
+      </label>
+    </div>
+    <div id="feed" class="flex flex-col gap-4"></div>
+    <div id="sentinel" class="h-px"></div>
+    <p id="status" class="p-4 text-center text-muted"></p>
+  </main>
+</Base>
+
+<script>
+  import { $user, $loading } from "../../../stores/auth";
+  import {
+    getFieldFeed, discoverField, getSubscriptions, subscribe, unsubscribe,
+    type FeedItem, type FieldSort,
+  } from "../../../lib/api";
+  import { createCard, type CardCtx } from "../../../lib/card";
+
+  const feedEl = document.getElementById("feed")!;
+  const statusEl = document.getElementById("status")!;
+  const nameEl = document.getElementById("field-name")!;
+  const hintEl = document.getElementById("field-hint")!;
+  const sentinel = document.getElementById("sentinel")!;
+  const sortSel = document.getElementById("sort") as HTMLSelectElement;
+  const hideSeenLabel = document.getElementById("hide-seen-label")!;
+  const hideSeenBox = document.getElementById("hide-seen") as HTMLInputElement;
+  const joinBtn = document.getElementById("join-btn") as HTMLButtonElement;
+  const PAGE_SIZE = 20;
+
+  // Path: /r/<field>
+  const parts = location.pathname.split("/").filter(Boolean);
+  const slug = decodeURIComponent(parts[1] || "");
+
+  let loadingPage = false;
+  let exhausted = false;
+  // Phase 1 ("db") pages through papers already stored for this field, sorted by
+  // the chosen order; once those run out we switch to phase 2 ("discover"), which
+  // cheaply ingests brand-new papers from S2 on the fly as the user keeps scrolling.
+  let mode: "db" | "discover" = "db";
+  let offset = 0;
+  let sort: FieldSort = "random";
+  let unseen = false;
+  // A per-run seed keeps the random order stable across paginated requests.
+  let seed = Math.floor(Math.random() * 1e9);
+  const seen = new Set<number>();
+  const subscribedSlugs = new Set<string>();
+
+  const cardCtx: CardCtx = {
+    subscribedSlugs,
+    signedIn: () => !!$user.get(),
+    onNeedLogin: () => { hintEl.textContent = "Sign in to subscribe to this field."; },
+    // One Join button by the title handles this whole page, so cards omit theirs.
+    showSubscribe: false,
+  };
+
+  // The single Join/Joined button next to the field title.
+  function renderJoin() {
+    const joined = subscribedSlugs.has(slug);
+    joinBtn.textContent = joined ? "Joined" : "Join";
+    joinBtn.classList.toggle("primary", !joined);
+  }
+
+  joinBtn.onclick = async () => {
+    if (!$user.get()) { hintEl.textContent = "Sign in to subscribe to this field."; return; }
+    joinBtn.disabled = true;
+    try {
+      if (subscribedSlugs.has(slug)) { await unsubscribe(slug); subscribedSlugs.delete(slug); }
+      else { await subscribe(slug); subscribedSlugs.add(slug); }
+    } catch (e) { console.error(e); }
+    joinBtn.disabled = false;
+    renderJoin();
+  };
+
+  function appendItems(items: FeedItem[]): number {
+    let added = 0;
+    for (const it of items) {
+      if (seen.has(it.paper_id)) continue;
+      seen.add(it.paper_id);
+      feedEl.appendChild(createCard(it, cardCtx));
+      added++;
+    }
+    return added;
+  }
+
+  async function refreshSubscriptions() {
+    subscribedSlugs.clear();
+    if ($user.get()) {
+      try {
+        const { subscriptions } = await getSubscriptions();
+        subscriptions.forEach((s) => subscribedSlugs.add(s.slug));
+      } catch (e) { console.error(e); }
+    }
+    renderJoin();
+  }
+
+  // Clear and restart the feed (on first load and whenever sort/filter changes).
+  async function reset() {
+    feedEl.innerHTML = "";
+    seen.clear();
+    loadingPage = false;
+    exhausted = false;
+    mode = "db";
+    offset = 0;
+    seed = Math.floor(Math.random() * 1e9);
+    statusEl.textContent = "";
+    await loadMore();
+  }
+
+  async function loadMore() {
+    if (loadingPage || exhausted || !slug) return;
+    loadingPage = true;
+    try {
+      if (mode === "db") {
+        statusEl.textContent = "Loading…";
+        const data = await getFieldFeed(slug, { offset, sort, seed, unseen, pageSize: PAGE_SIZE });
+        if (data.error) {
+          nameEl.textContent = "Field not found";
+          exhausted = true;
+          statusEl.textContent = "";
+          return;
+        }
+        if (data.field) {
+          nameEl.textContent = data.field.name.split('-').map(word => word[0].toUpperCase() + word.slice(1)) .join(' ');
+          document.title = `${data.field.name} · AcademicTok`;
+        }
+        appendItems(data.items as FeedItem[]);
+        offset = data.next_offset;
+        // A short page means the stored papers are exhausted → switch to live
+        // discovery and fetch a batch right away so scrolling stays continuous.
+        if (data.items.length < PAGE_SIZE) {
+          mode = "discover";
+          loadingPage = false;
+          return loadMore();
+        }
+        statusEl.textContent = "";
+      } else {
+        statusEl.textContent = "Finding new papers…";
+        const data = await discoverField(slug);
+        const added = appendItems(data.items);
+        if (data.exhausted) exhausted = true;
+        // No new papers right now: stop quietly (the observer re-fires when the
+        // user scrolls again, which will retry) rather than spin.
+        statusEl.textContent = exhausted
+          ? (feedEl.children.length ? "End of field." : "No papers in this field yet.")
+          : (added ? "" : "You're all caught up for now.");
+      }
+    } catch (e) {
+      console.error(e);
+      statusEl.textContent = "Failed to load.";
+    }
+    loadingPage = false;
+  }
+
+  sortSel.onchange = () => { sort = sortSel.value as FieldSort; reset(); };
+  hideSeenBox.onchange = () => { unseen = hideSeenBox.checked; reset(); };
+
+  // Prefetch the next page well before the user reaches the bottom.
+  new IntersectionObserver((entries) => {
+    if (entries[0].isIntersecting) loadMore();
+  }, { rootMargin: "800px" }).observe(sentinel);
+
+  // "Hide seen" only makes sense when signed in.
+  function syncSeenControl() {
+    const signedIn = !!$user.get();
+    hideSeenLabel.hidden = !signedIn;
+    if (!signedIn && unseen) { unseen = false; hideSeenBox.checked = false; }
+  }
+
+  let booted = false;
+  $loading.subscribe(async (loading) => {
+    if (loading) return;
+    syncSeenControl();
+    await refreshSubscriptions();
+    if (!booted) { booted = true; await reset(); }
+  });
+  $user.subscribe(async () => {
+    if ($loading.get()) return;
+    syncSeenControl();
+    await refreshSubscriptions();
+  });
+</script>

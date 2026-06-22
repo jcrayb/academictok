@@ -1,0 +1,86 @@
+@import "tailwindcss";
+
+/* Dark-theme palette exposed as Tailwind color utilities: bg-card, text-muted,
+   border-border, text-accent, etc. (mirrors the old CSS custom properties). */
+@theme {
+  --color-bg: #0f1115;
+  --color-card: #1a1d24;
+  --color-border: #2a2f3a;
+  --color-text: #e8eaed;
+  --color-muted: #9aa0aa;
+  --color-accent: #ff5b6e;
+  --color-accent-dim: #3a2030;
+  --color-ok: #6ee7a0;
+  --color-bad: #ffb3c0;
+}
+
+@layer base {
+  html,
+  body {
+    margin: 0;
+    background: var(--color-bg);
+    color: var(--color-text);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+
+  /* Preflight strips these; restore sensible defaults so bare elements still
+     look right. Per-element Tailwind utilities still override (utilities layer
+     wins over base). */
+  a {
+    color: var(--color-accent);
+  }
+  h1 {
+    font-size: 2em;
+    font-weight: 700;
+    line-height: 1.2;
+  }
+  h2 {
+    font-size: 1.5em;
+    font-weight: 700;
+  }
+  h3 {
+    font-size: 1.17em;
+    font-weight: 700;
+  }
+
+  /* Default button look; "primary" variants add bg/border utilities. */
+  button {
+    font: inherit;
+    cursor: pointer;
+    border-radius: 0.5rem;
+    border: 1px solid var(--color-border);
+    background: var(--color-card);
+    color: var(--color-text);
+    padding: 0.5rem 0.9rem;
+  }
+  button:hover {
+    border-color: var(--color-accent);
+  }
+
+  /* The `hidden` attribute must beat layout utilities like `flex` (otherwise a
+     hidden flex container still shows). JS toggles el.hidden across the app. */
+  [hidden] {
+    display: none !important;
+  }
+
+  /* MathJax display equations shouldn't overflow narrow columns. The element is
+     injected by MathJax at runtime, so it can't carry a utility class. */
+  mjx-container[display="true"] {
+    overflow-x: auto;
+    overflow-y: hidden;
+    max-width: 100%;
+  }
+}
+
+@layer components {
+  /* Primary call-to-action button. Toggled on/off in JS (subscribe buttons),
+     so it stays a single class rather than a utility cluster. */
+  .primary {
+    background: var(--color-accent);
+    border-color: var(--color-accent);
+    color: #fff;
+  }
+  .primary:hover {
+    border-color: var(--color-accent);
+  }
+}

@@ -1,0 +1,23 @@
+# Queries for bulk_ingest.sh — one search query per line.
+# Blank lines and lines starting with '#' are ignored.
+#
+# Run:  scripts/bulk_ingest.sh -l 30 -c 5 scripts/queries.example.txt
+#
+# Copy this file (e.g. to scripts/queries.txt) and edit freely; each line is
+# fed to Semantic Scholar as a search and every new paper it returns is ingested.
+
+graph neural networks
+diffusion models for image generation
+large language model reasoning
+retrieval augmented generation
+reinforcement learning from human feedback
+protein structure prediction
+quantum error correction
+gene editing CRISPR
+topological data analysis
+mechanistic interpretability of neural networks
+federated learning privacy
+neural radiance fields
+causal inference machine learning
+transformer architecture efficiency
+self-supervised representation learning

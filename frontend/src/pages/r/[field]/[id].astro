@@ -1,0 +1,138 @@
+---
+import Base from "../../../layouts/Base.astro";
+import NavBar from "../../../components/NavBar.astro";
+
+// Reddit-style post page: /r/<field>/<post-id>. Rendered on demand (SSR); the
+// post id (Semantic Scholar paperId) comes from the path, the detailed summary
+// is fetched client-side.
+const { field } = Astro.params;
+---
+
+<Base title="Paper · AcademicTok" useMath={true}>
+  <NavBar />
+  <main class="mx-auto max-w-[720px] px-4 pt-4 pb-16">
+    <a href={`/r/${field}`} class="mb-4 inline-block text-[0.9rem] text-muted no-underline">← r/{field}</a>
+    <article id="paper">
+      <p class="py-10 text-center text-muted">
+        <span class="mr-[0.4rem] inline-block h-[1em] w-[1em] animate-spin rounded-full border-2 border-border border-t-accent align-[-2px]"></span>Loading detailed summary…
+      </p>
+    </article>
+  </main>
+</Base>
+
+<script>
+  import { getPaper, API_BASE, type PaperDetail, type PaperImage } from "../../../lib/api";
+  import { fieldHref } from "../../../lib/card";
+
+  const root = document.getElementById("paper")!;
+  // Path: /r/<field>/<id>
+  const parts = location.pathname.split("/").filter(Boolean);
+  const id = decodeURIComponent(parts[2] || "");
+
+  // Section-heading + loading-message styles reused across injected markup.
+  const H2 = "mt-[1.6rem] mb-2 text-[0.92rem] uppercase tracking-[0.04em] text-muted";
+  const LOADING = "py-10 text-center text-muted";
+
+  function escapeHtml(s: string) {
+    return (s ?? "").replace(/[&<>"']/g, (c) => (
+      { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!
+    ));
+  }
+  function paragraphs(text: string) {
+    return text
+      .split(/\n{2,}/)
+      .map((p) => p.trim())
+      .filter(Boolean)
+      .map((p) => `<p class="mb-4 leading-[1.65]">${escapeHtml(p).replace(/\n/g, "<br/>")}</p>`)
+      .join("");
+  }
+  function authorsLine(a: string[]) {
+    if (!a?.length) return "";
+    return a.length <= 8 ? a.join(", ") : a.slice(0, 8).join(", ") + " et al.";
+  }
+  function figuresBlock(images: PaperImage[]) {
+    if (!images?.length) return "";
+    const figs = images.map((im, i) => {
+      const cap = im.caption
+        ? escapeHtml(im.caption)
+        : `Figure ${i + 1}${im.page ? ` (p. ${im.page})` : ""}`;
+      return `
+        <figure class="m-0 rounded-[10px] border border-border bg-white p-[0.8rem]">
+          <img class="mx-auto block h-auto max-w-full rounded" src="${API_BASE}${im.url}" alt="${cap}" loading="lazy" />
+          <figcaption class="mt-[0.6rem] text-center text-[0.82rem] text-muted">${cap}</figcaption>
+        </figure>`;
+    }).join("");
+    return `<h2 class="${H2}">Figures</h2><div class="flex flex-col gap-[1.4rem]">${figs}</div>`;
+  }
+
+  // Re-typeset LaTeX after we inject content. MathJax loads async, so wait for it.
+  async function typeset(el: HTMLElement) {
+    const MJ = (window as any).MathJax;
+    if (MJ?.startup?.promise) { try { await MJ.startup.promise; } catch {} }
+    for (let i = 0; i < 50 && !(window as any).MathJax?.typesetPromise; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    try { await (window as any).MathJax?.typesetPromise([el]); } catch {}
+  }
+
+  function render(p: PaperDetail) {
+    document.title = `${p.summary_title} · AcademicTok`;
+    const fields = (p.fields || [])
+      .map((f) => `<a href="${fieldHref(f.slug)}" class="text-[0.85rem] font-semibold text-accent no-underline">r/${f.slug}</a>`)
+      .join(" ");
+    // Show the detailed summary once it's ready; until then the short summary,
+    // with a note while it's still being generated in the background.
+    const generating = !p.long_body && p.enriching
+      ? `<p class="mt-3 text-[0.85rem] text-muted"><span class="mr-[0.4rem] inline-block h-[0.9em] w-[0.9em] animate-spin rounded-full border-2 border-border border-t-accent align-[-2px]"></span>Generating a detailed summary… this can take a minute.</p>`
+      : "";
+    const long = p.long_body
+      ? `<h2 class="${H2}">Detailed summary</h2><div>${paragraphs(p.long_body)}</div>`
+      : `<h2 class="${H2}">Summary</h2><div>${paragraphs(p.summary_body)}</div>${generating}`;
+    root.innerHTML = `
+      <div class="flex flex-wrap gap-2">${fields}</div>
+      <h1 class="mt-[0.4rem] mb-[0.6rem] text-[1.7rem] leading-[1.25]">${escapeHtml(p.summary_title)}</h1>
+      <div class="mt-[0.6rem] mb-[1.4rem] border-l-[3px] border-border pl-[0.9rem]">
+        <div class="font-semibold">${escapeHtml(p.paper_title)}</div>
+        <div class="mt-[0.15rem] text-[0.88rem] text-muted">${escapeHtml(authorsLine(p.authors))}</div>
+        <div class="mt-[0.15rem] text-[0.88rem] text-muted">${escapeHtml(p.venue || "")} ${p.year ?? ""} · ${p.citation_count} citations</div>
+      </div>
+      ${long}
+      ${figuresBlock(p.images)}
+      <h2 class="${H2}">Source</h2>
+      <p><a href="${p.url}" target="_blank" rel="noopener">Read the original paper ↗</a></p>`;
+    typeset(root);
+  }
+
+  async function load() {
+    if (!id) { root.innerHTML = `<p class="${LOADING}">No paper specified.</p>`; return; }
+    try {
+      // First call returns fast (short summary) and kicks off background
+      // generation of the detailed summary.
+      const p = await getPaper(id);
+      if ((p as any).error) { root.innerHTML = `<p class="${LOADING}">Paper not found.</p>`; return; }
+      render(p);
+      if (!p.long_body && p.enriching) pollDetailed();
+    } catch (e) {
+      console.error(e);
+      root.innerHTML = `<p class="${LOADING}">Couldn't load this paper.</p>`;
+    }
+  }
+
+  // Poll (read-only, no re-trigger) until the detailed summary is ready, ~2 min.
+  async function pollDetailed() {
+    for (let i = 0; i < 40; i++) {
+      await new Promise((r) => setTimeout(r, 3000));
+      let p: PaperDetail;
+      try { p = await getPaper(id, false); } catch { continue; }
+      if ((p as any).error) return;
+      if (p.long_body) { render(p); return; }       // detailed summary arrived
+      if (!p.enriching) { render(p); return; }       // generation finished/failed
+    }
+    // Timed out — drop the spinner note, keep the short summary.
+    try {
+      const p = await getPaper(id, false);
+      render({ ...p, enriching: false });
+    } catch { /* leave the last render in place */ }
+  }
+  load();
+</script>

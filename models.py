@@ -1,0 +1,572 @@
+"""Lightweight data-access functions over SQLite.
+
+Each function takes an open connection so callers control the transaction.
+"""
+import json
+
+from db import now_iso
+
+
+# ── Fields ──────────────────────────────────────────────────────────────────
+
+def _field_row(r):
+    d = dict(r)
+    raw = d.pop("keywords", None)
+    d["keywords"] = [k.strip() for k in raw.split(",") if k.strip()] if raw else []
+    return d
+
+
+def list_fields(conn):
+    rows = conn.execute(
+        """SELECT f.id, f.slug, f.name, f.description, f.keywords, f.is_seed,
+                  COUNT(pf.paper_id) AS paper_count
+           FROM fields f
+           LEFT JOIN paper_fields pf ON pf.field_id = f.id
+           GROUP BY f.id
+           ORDER BY f.name"""
+    ).fetchall()
+    return [_field_row(r) for r in rows]
+
+
+def search_fields(conn, query):
+    """Fields whose name, description, or keywords match the query (substring,
+    case-insensitive). Every query word must match somewhere (AND), so adding
+    more words narrows the results rather than broadening them."""
+    words = [w.strip() for w in query.lower().split() if w.strip()]
+    if not words:
+        return list_fields(conn)
+    rows = conn.execute(
+        """SELECT f.id, f.slug, f.name, f.description, f.keywords, f.is_seed,
+                  COUNT(pf.paper_id) AS paper_count
+           FROM fields f
+           LEFT JOIN paper_fields pf ON pf.field_id = f.id
+           GROUP BY f.id
+           ORDER BY f.name"""
+    ).fetchall()
+    fields = [_field_row(r) for r in rows]
+    matches = []
+    for f in fields:
+        haystack = " ".join([
+            f["name"].lower(), (f["description"] or "").lower(),
+            " ".join(k.lower() for k in f["keywords"]),
+        ])
+        if all(w in haystack for w in words):
+            matches.append(f)
+    return matches
+
+
+def get_field_by_slug(conn, slug):
+    row = conn.execute("SELECT * FROM fields WHERE slug = ?", (slug,)).fetchone()
+    return dict(row) if row else None
+
+
+def set_field_discover_offset(conn, field_id, offset):
+    """Persist how far on-the-fly discovery has paged into S2 for this field."""
+    conn.execute(
+        "UPDATE fields SET discover_offset = ?, updated_at = ? WHERE id = ?",
+        (offset, now_iso(), field_id),
+    )
+
+
+def fields_for_classifier(conn):
+    """Minimal field list (slug/name/description) for the LLM classifier."""
+    rows = conn.execute(
+        "SELECT slug, name, description FROM fields ORDER BY name"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def create_field(conn, slug, name, description, query=None, is_seed=0, keywords=None):
+    """Insert a field if absent; return its id. ``keywords`` is a list of search
+    terms, stored comma-separated."""
+    kw = ",".join(keywords) if keywords else None
+    ts = now_iso()
+    conn.execute(
+        """INSERT OR IGNORE INTO fields
+           (slug, name, description, query, keywords, is_seed, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (slug, name, description, query, kw, is_seed, ts, ts),
+    )
+    row = conn.execute("SELECT id FROM fields WHERE slug = ?", (slug,)).fetchone()
+    return row["id"]
+
+
+def set_field_keywords(conn, field_id, keywords):
+    conn.execute(
+        "UPDATE fields SET keywords = ?, updated_at = ? WHERE id = ?",
+        (",".join(keywords) if keywords else None, now_iso(), field_id),
+    )
+
+
+def fields_missing_keywords(conn, limit, after_id=0, force=False):
+    """Fields to (re)generate keywords for, oldest-first with a backfill cursor
+    via ``after_id`` (field id) so a forced full recompute can page through
+    every field exactly once. By default only fields that lack keywords;
+    ``force=True`` returns every field (used to recompute existing ones too).
+    """
+    clause = "" if force else "AND (keywords IS NULL OR keywords = '')"
+    rows = conn.execute(
+        f"""SELECT id, slug, name, description FROM fields
+            WHERE id > ? {clause}
+            ORDER BY id LIMIT ?""",
+        (after_id, limit),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── Papers / summaries ──────────────────────────────────────────────────────
+
+def paper_exists(conn, s2_paper_id):
+    return conn.execute(
+        "SELECT 1 FROM papers WHERE s2_paper_id = ?", (s2_paper_id,)
+    ).fetchone() is not None
+
+
+def insert_paper(conn, paper):
+    cur = conn.execute(
+        """INSERT INTO papers
+           (s2_paper_id, title, abstract, authors, year, venue, url,
+            citation_count, pdf_url, fetched_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            paper["s2_paper_id"], paper["title"], paper["abstract"],
+            json.dumps(paper["authors"]), paper["year"], paper["venue"],
+            paper["url"], paper["citation_count"], paper.get("pdf_url"), now_iso(),
+        ),
+    )
+    return cur.lastrowid
+
+
+def insert_paper_image(conn, paper_id, img):
+    """Persist one extracted figure (img: filename, page, width, height, ord)."""
+    conn.execute(
+        """INSERT INTO paper_images
+           (paper_id, filename, page, width, height, caption, ord, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (paper_id, img["filename"], img.get("page"), img.get("width"),
+         img.get("height"), img.get("caption"), img.get("ord", 0), now_iso()),
+    )
+
+
+def get_paper_images(conn, paper_id):
+    rows = conn.execute(
+        """SELECT filename, page, width, height, caption, ord
+           FROM paper_images WHERE paper_id = ? ORDER BY ord""",
+        (paper_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def insert_summary(conn, paper_id, summary):
+    ts = now_iso()
+    conn.execute(
+        """INSERT OR REPLACE INTO summaries
+           (paper_id, title, body, long_body, long_source, model,
+            needs_full_summary, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (paper_id, summary["title"], summary["body"], summary.get("long_body"),
+         summary.get("long_source"), summary["model"],
+         summary.get("needs_full_summary", 0), ts, ts),
+    )
+
+
+def pending_full_summaries(conn, limit):
+    """Discovery summaries (fast model) awaiting re-generation by the full model."""
+    rows = conn.execute(
+        """SELECT s.paper_id, p.title, p.abstract, p.venue, p.year
+           FROM summaries s JOIN papers p ON p.id = s.paper_id
+           WHERE s.needs_full_summary = 1
+           ORDER BY s.paper_id DESC LIMIT ?""",
+        (limit,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def update_short_summary(conn, paper_id, title, body, model):
+    """Replace a paper's short summary and clear its upgrade flag."""
+    conn.execute(
+        """UPDATE summaries SET title = ?, body = ?, model = ?,
+                  needs_full_summary = 0, updated_at = ? WHERE paper_id = ?""",
+        (title, body, model, now_iso(), paper_id),
+    )
+
+
+def paper_enrichment_state(conn, paper_id):
+    """Everything enrich_paper needs to (re)generate a detailed summary + figures."""
+    p = conn.execute(
+        "SELECT s2_paper_id, title, abstract, venue, year, pdf_url FROM papers WHERE id = ?",
+        (paper_id,),
+    ).fetchone()
+    if not p:
+        return None
+    s = conn.execute(
+        "SELECT long_body, long_source FROM summaries WHERE paper_id = ?", (paper_id,)
+    ).fetchone()
+    n_img = conn.execute(
+        "SELECT COUNT(*) AS c FROM paper_images WHERE paper_id = ?", (paper_id,)
+    ).fetchone()["c"]
+    fields = conn.execute(
+        """SELECT f.name FROM paper_fields pf JOIN fields f ON f.id = pf.field_id
+           WHERE pf.paper_id = ?""",
+        (paper_id,),
+    ).fetchall()
+    return {
+        **dict(p),
+        "long_body": s["long_body"] if s else None,
+        "long_source": s["long_source"] if s else None,
+        "has_images": n_img > 0,
+        "field_names": [r["name"] for r in fields],
+    }
+
+
+def mark_enriched(conn, paper_id):
+    """Stamp when a paper's detailed summary + figures were last attempted, so
+    the scheduled precompute pass tries each paper at most once."""
+    ts = now_iso()
+    conn.execute(
+        "UPDATE summaries SET enriched_at = ?, updated_at = ? WHERE paper_id = ?",
+        (ts, ts, paper_id),
+    )
+
+
+def papers_needing_enrichment(conn, limit):
+    """Paper ids the scheduled pass hasn't attempted yet that still have something
+    to gain (a missing detailed summary, or a PDF that could yield full text /
+    figures). First-time (no detailed summary) papers are prioritized."""
+    rows = conn.execute(
+        """SELECT p.id FROM papers p
+           JOIN summaries s ON s.paper_id = p.id
+           WHERE s.enriched_at IS NULL
+             AND (s.long_body IS NULL OR p.pdf_url IS NOT NULL)
+           ORDER BY (s.long_body IS NOT NULL), p.id DESC
+           LIMIT ?""",
+        (limit,),
+    ).fetchall()
+    return [r["id"] for r in rows]
+
+
+def set_long_summary(conn, paper_id, long_body, source=None):
+    conn.execute(
+        "UPDATE summaries SET long_body = ?, long_source = ?, updated_at = ? WHERE paper_id = ?",
+        (long_body, source, now_iso(), paper_id),
+    )
+
+
+def get_paper_raw(conn, paper_id):
+    """Raw paper fields needed to (re)generate a summary."""
+    row = conn.execute(
+        "SELECT id, title, abstract, venue, year FROM papers WHERE id = ?",
+        (paper_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def link_paper_field(conn, paper_id, field_id, is_primary=0):
+    """Link a paper to a field. ``is_primary=1`` marks its home field (the one
+    cards are labeled with); secondary fields it also fits use the default 0."""
+    conn.execute(
+        """INSERT OR IGNORE INTO paper_fields (paper_id, field_id, is_primary, created_at)
+           VALUES (?, ?, ?, ?)""",
+        (paper_id, field_id, is_primary, now_iso()),
+    )
+
+
+def fields_for_paper(conn, paper_id):
+    """All fields a paper belongs to, primary (home) field first."""
+    rows = conn.execute(
+        """SELECT f.slug, f.name FROM paper_fields pf JOIN fields f ON f.id = pf.field_id
+           WHERE pf.paper_id = ? ORDER BY pf.is_primary DESC, f.name""",
+        (paper_id,),
+    ).fetchall()
+    return [{"slug": r["slug"], "name": r["name"]} for r in rows]
+
+
+def papers_missing_secondary_fields(conn, limit, after_id=0, force=False):
+    """Papers with a primary field to (re)compute secondary fields for,
+    oldest-first with a backfill cursor via ``after_id`` (paper_id) so a long
+    run can resume. By default only papers with no secondary fields yet;
+    ``force=True`` returns every paper (used to recompute existing ones too).
+    """
+    exclude = (
+        "" if force else
+        "AND p.id NOT IN (SELECT paper_id FROM paper_fields WHERE is_primary = 0)"
+    )
+    rows = conn.execute(
+        f"""SELECT p.id AS paper_id, p.title, s.body AS summary_body,
+                   f.slug AS primary_slug, f.name AS primary_name
+            FROM papers p
+            JOIN paper_fields pf ON pf.paper_id = p.id AND pf.is_primary = 1
+            JOIN fields f ON f.id = pf.field_id
+            JOIN summaries s ON s.paper_id = p.id
+            WHERE p.id > ?
+            {exclude}
+            ORDER BY p.id
+            LIMIT ?""",
+        (after_id, limit),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def clear_secondary_fields(conn, paper_id):
+    """Remove a paper's existing secondary field links (keeps the primary),
+    so they can be recomputed from scratch."""
+    conn.execute(
+        "DELETE FROM paper_fields WHERE paper_id = ? AND is_primary = 0",
+        (paper_id,),
+    )
+
+
+def log_ingest(conn, query, s2_paper_id, status, detail=""):
+    conn.execute(
+        """INSERT INTO ingest_log (query, s2_paper_id, status, detail, created_at)
+           VALUES (?, ?, ?, ?, ?)""",
+        (query, s2_paper_id, status, detail, now_iso()),
+    )
+
+
+# ── Feed queries ────────────────────────────────────────────────────────────
+
+# One row per paper, labeled with its primary (home) field. A paper may belong
+# to several fields, but joining only the primary keeps cross-field feeds from
+# emitting the same paper once per field. Field-membership filtering is done
+# separately (via a paper_fields subquery) so a paper still surfaces on any of
+# its fields' pages.
+_FEED_SELECT = """
+SELECT p.id AS paper_id, p.s2_paper_id, p.title AS paper_title, p.authors,
+       p.year, p.venue, p.url, p.citation_count,
+       s.title AS summary_title, s.body AS summary_body,
+       f.slug AS field_slug, f.name AS field_name
+FROM papers p
+JOIN summaries s ON s.paper_id = p.id
+JOIN paper_fields pf ON pf.paper_id = p.id AND pf.is_primary = 1
+JOIN fields f ON f.id = pf.field_id
+"""
+
+# Membership test reused by the field-filtered feeds: a paper "is in" a field
+# if it's linked to it as primary OR secondary.
+def _in_fields_clause(field_ids):
+    placeholders = ",".join("?" * len(field_ids))
+    return f"p.id IN (SELECT paper_id FROM paper_fields WHERE field_id IN ({placeholders}))"
+
+
+def _feed_row(r):
+    d = dict(r)
+    d["authors"] = json.loads(d["authors"]) if d.get("authors") else []
+    d["field"] = {"slug": d.pop("field_slug"), "name": d.pop("field_name")}
+    return d
+
+
+def _unseen_join(unseen_uid, params):
+    """Append the seen-papers anti-join when filtering to unseen papers.
+
+    Returns (join_sql, where_extra). The uid param is prepended to ``params`` in
+    place so it lines up with the join's placeholder (which precedes WHERE).
+    """
+    if not unseen_uid:
+        return "", ""
+    params.append(unseen_uid)
+    return ("LEFT JOIN seen_papers sp ON sp.paper_id = p.id AND sp.uid = ?",
+            " AND sp.paper_id IS NULL")
+
+
+def feed_for_fields(conn, field_ids, limit, before_id=None, unseen_uid=None):
+    """Keyset-paginated feed for a set of field ids (newest paper id first).
+
+    When ``unseen_uid`` is given, papers that user has already seen are excluded.
+    """
+    if not field_ids:
+        return []
+    params = []
+    join, unseen_where = _unseen_join(unseen_uid, params)
+    where = f"WHERE {_in_fields_clause(field_ids)}{unseen_where}"
+    params.extend(field_ids)
+    if before_id is not None:
+        where += " AND p.id < ?"
+        params.append(before_id)
+    params.append(limit)
+    rows = conn.execute(
+        f"{_FEED_SELECT} {join} {where} ORDER BY p.id DESC LIMIT ?", params
+    ).fetchall()
+    return [_feed_row(r) for r in rows]
+
+
+def feed_for_paper_ids(conn, paper_ids):
+    """Feed rows for specific paper ids (newest first). Used to return the papers
+    that on-the-fly discovery just inserted, in the same shape as the feed."""
+    if not paper_ids:
+        return []
+    placeholders = ",".join("?" * len(paper_ids))
+    rows = conn.execute(
+        f"{_FEED_SELECT} WHERE p.id IN ({placeholders}) ORDER BY p.id DESC",
+        list(paper_ids),
+    ).fetchall()
+    return [_feed_row(r) for r in rows]
+
+
+def feed_for_field_slug(conn, slug, limit, before_id=None):
+    field = get_field_by_slug(conn, slug)
+    if not field:
+        return []
+    return feed_for_fields(conn, [field["id"]], limit, before_id)
+
+
+# Sort modes for a single field's browse view. "random" is a deterministic
+# shuffle seeded per session (?) so OFFSET pagination stays stable as you scroll.
+_FIELD_SORTS = {
+    "citation": "p.citation_count DESC, p.id DESC",
+    "year": "p.year DESC, p.id DESC",
+    "random": "((p.id + ?) * 2654435761) % 2147483647, p.id DESC",
+}
+
+
+def feed_for_field_sorted(conn, field_id, limit, offset=0, sort="random",
+                          seed=0, unseen_uid=None):
+    """Offset-paginated feed for one field, sorted by citation / year / random.
+
+    ``unseen_uid`` excludes that user's already-seen papers. ``seed`` makes the
+    random order reproducible across pages within a browsing session.
+    """
+    order = _FIELD_SORTS.get(sort, _FIELD_SORTS["random"])
+    params = []
+    join, unseen_where = _unseen_join(unseen_uid, params)
+    where = f"WHERE {_in_fields_clause([field_id])}{unseen_where}"
+    params.append(field_id)
+    if sort == "random":
+        params.append(seed)  # lines up with the ? inside the ORDER BY expression
+    params.extend([limit, offset])
+    rows = conn.execute(
+        f"{_FEED_SELECT} {join} {where} ORDER BY {order} LIMIT ? OFFSET ?", params
+    ).fetchall()
+    return [_feed_row(r) for r in rows]
+
+
+def feed_all(conn, limit, before_id=None, exclude_field_ids=None, unseen_uid=None):
+    """Feed across all fields, optionally excluding some (for discovery mix).
+
+    When ``unseen_uid`` is given, papers that user has already seen are excluded.
+    """
+    params = []
+    join, unseen_where = _unseen_join(unseen_uid, params)
+    where = "WHERE 1=1" + unseen_where
+    if exclude_field_ids:
+        # Exclude papers in any excluded field (primary or secondary), so a
+        # multi-field paper already shown via the subscribed pool isn't repeated.
+        where += f" AND NOT {_in_fields_clause(exclude_field_ids)}"
+        params.extend(exclude_field_ids)
+    if before_id is not None:
+        where += " AND p.id < ?"
+        params.append(before_id)
+    params.append(limit)
+    rows = conn.execute(
+        f"{_FEED_SELECT} {join} {where} ORDER BY p.id DESC LIMIT ?", params
+    ).fetchall()
+    return [_feed_row(r) for r in rows]
+
+
+def get_paper_detail(conn, s2_paper_id):
+    row = conn.execute(
+        f"{_FEED_SELECT} WHERE p.s2_paper_id = ?", (s2_paper_id,)
+    ).fetchone()
+    if not row:
+        return None
+    base = _feed_row(row)
+    base.pop("field", None)
+    # A paper may map to multiple fields; collect them all (primary first).
+    base["fields"] = fields_for_paper(conn, base["paper_id"])
+    # Long detailed summary (may be null until backfilled). long_source records
+    # whether it was grounded in full text, so the view path can upgrade it.
+    long_row = conn.execute(
+        "SELECT long_body, long_source FROM summaries WHERE paper_id = ?",
+        (base["paper_id"],),
+    ).fetchone()
+    base["long_body"] = long_row["long_body"] if long_row else None
+    base["long_source"] = long_row["long_source"] if long_row else None
+    prow = conn.execute(
+        "SELECT abstract, pdf_url FROM papers WHERE id = ?", (base["paper_id"],)
+    ).fetchone()
+    base["abstract"] = prow["abstract"]
+    base["pdf_url"] = prow["pdf_url"]
+    # Figures extracted from the PDF, with a web path for the frontend.
+    base["images"] = [
+        {**img, "url": f"/media/figures/{img['filename']}"}
+        for img in get_paper_images(conn, base["paper_id"])
+    ]
+    return base
+
+
+# ── Users / subscriptions ───────────────────────────────────────────────────
+
+def ensure_user(conn, uid):
+    conn.execute(
+        "INSERT OR IGNORE INTO users (uid, created_at) VALUES (?, ?)",
+        (uid, now_iso()),
+    )
+    conn.execute("UPDATE users SET last_seen = ? WHERE uid = ?", (now_iso(), uid))
+
+
+def user_exists(conn, uid):
+    return conn.execute(
+        "SELECT 1 FROM users WHERE uid = ?", (uid,)
+    ).fetchone() is not None
+
+
+def mark_papers_seen(conn, uid, paper_ids):
+    """Record that a user has scrolled past these papers (idempotent)."""
+    if not paper_ids:
+        return
+    ts = now_iso()
+    conn.executemany(
+        "INSERT OR IGNORE INTO seen_papers (uid, paper_id, seen_at) VALUES (?, ?, ?)",
+        [(uid, pid, ts) for pid in paper_ids],
+    )
+
+
+def reset_seen(conn, uid=None):
+    """Clear seen-paper history so the feed treats papers as unseen again.
+    Clears every user's history, or just one user's when ``uid`` is given.
+    Returns the number of rows removed."""
+    if uid:
+        cur = conn.execute("DELETE FROM seen_papers WHERE uid = ?", (uid,))
+    else:
+        cur = conn.execute("DELETE FROM seen_papers")
+    return cur.rowcount
+
+
+def list_subscriptions(conn, uid):
+    rows = conn.execute(
+        """SELECT f.slug, f.name, f.description
+           FROM subscriptions s JOIN fields f ON f.id = s.field_id
+           WHERE s.uid = ? ORDER BY f.name""",
+        (uid,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def subscribed_field_ids(conn, uid):
+    rows = conn.execute(
+        "SELECT field_id FROM subscriptions WHERE uid = ?", (uid,)
+    ).fetchall()
+    return [r["field_id"] for r in rows]
+
+
+def subscribe(conn, uid, slug):
+    field = get_field_by_slug(conn, slug)
+    if not field:
+        return False
+    conn.execute(
+        """INSERT OR IGNORE INTO subscriptions (uid, field_id, created_at)
+           VALUES (?, ?, ?)""",
+        (uid, field["id"], now_iso()),
+    )
+    return True
+
+
+def unsubscribe(conn, uid, slug):
+    field = get_field_by_slug(conn, slug)
+    if not field:
+        return False
+    conn.execute(
+        "DELETE FROM subscriptions WHERE uid = ? AND field_id = ?",
+        (uid, field["id"]),
+    )
+    return True

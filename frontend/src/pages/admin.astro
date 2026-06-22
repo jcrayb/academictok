@@ -1,0 +1,458 @@
+---
+import Base from "../layouts/Base.astro";
+import NavBar from "../components/NavBar.astro";
+---
+
+<Base title="Admin · AcademicTok">
+  <NavBar />
+  <main class="mx-auto max-w-[720px] p-4">
+    <!-- Access denied / login prompt. This is the ONLY thing shown to
+         non-admins; the dashboard panel below stays out of the DOM flow. -->
+    <section id="denied" class="flex justify-center px-4 py-16" hidden>
+      <div class="flex max-w-[420px] flex-col items-center gap-[0.8rem] rounded-[14px] border border-border bg-card px-8 py-[2.2rem] text-center">
+        <div class="text-[2.4rem]">🔒</div>
+        <h2 id="denied-title" class="m-0 text-[1.3rem]">Access denied</h2>
+        <p id="denied-msg" class="m-0 leading-[1.5] text-muted"></p>
+        <button id="denied-signin" class="primary mt-[0.3rem]" hidden>Sign in with Google</button>
+        <button id="denied-signout" class="mt-[0.3rem]" hidden>Sign out</button>
+      </div>
+    </section>
+
+    <section id="panel" class="flex flex-col gap-4" hidden>
+      <h1>Ingestion dashboard</h1>
+      <div id="llm-disabled-banner" class="rounded-lg border border-accent bg-card p-[0.8rem] text-[0.85rem] text-muted" hidden>
+        LLM features are disabled on this server (<code>LLM_ENABLED=false</code>).
+        Ingestion, secondary-field/keyword recompute, and detailed-summary
+        enrichment are unavailable here — run those on a machine with Ollama
+        against the same database.
+      </div>
+      <form id="ingest-form" class="flex flex-col gap-[0.8rem] rounded-xl border border-border bg-card p-[1.1rem]">
+        <label class="flex flex-col gap-[0.3rem] text-[0.9rem] text-muted">
+          Source
+          <select id="source" class="rounded-lg border border-border bg-bg p-2 text-text">
+            <option value="all">All seed fields</option>
+            <option value="field">Specific field</option>
+            <option value="query">Custom query</option>
+          </select>
+        </label>
+
+        <label id="field-row" class="flex flex-col gap-[0.3rem] text-[0.9rem] text-muted" hidden>
+          Field
+          <select id="field" class="rounded-lg border border-border bg-bg p-2 text-text"></select>
+        </label>
+
+        <label id="query-row" class="flex flex-col gap-[0.3rem] text-[0.9rem] text-muted" hidden>
+          Query
+          <input id="query" type="text" placeholder="e.g. graph neural networks" class="rounded-lg border border-border bg-bg p-2 text-text" />
+        </label>
+
+        <div class="flex gap-4">
+          <label class="flex flex-1 flex-col gap-[0.3rem] text-[0.9rem] text-muted">Limit
+            <input id="limit" type="number" value="10" min="1" max="100" class="rounded-lg border border-border bg-bg p-2 text-text" />
+          </label>
+          <label class="flex flex-1 flex-col gap-[0.3rem] text-[0.9rem] text-muted">Min citations
+            <input id="min-citations" type="number" value="0" min="0" class="rounded-lg border border-border bg-bg p-2 text-text" />
+          </label>
+        </div>
+
+        <button id="run" type="submit" class="primary">Run ingestion</button>
+      </form>
+
+      <h2>Utilities</h2>
+      <div class="flex flex-col gap-[0.8rem] rounded-xl border border-border bg-card p-[1.1rem]">
+        <div class="flex flex-wrap items-center gap-[0.6rem]">
+          <button id="run-secondary-fields">Recompute secondary fields</button>
+          <label class="flex items-center gap-[0.35rem] text-[0.85rem] text-muted">
+            <input id="secondary-fields-force" type="checkbox" />
+            recompute every paper (not just ones missing secondary fields)
+          </label>
+        </div>
+        <div class="flex flex-wrap items-center gap-[0.6rem]">
+          <button id="run-keywords">Recompute field keywords</button>
+          <label class="flex items-center gap-[0.35rem] text-[0.85rem] text-muted">
+            <input id="keywords-force" type="checkbox" />
+            recompute every field (not just ones missing keywords)
+          </label>
+        </div>
+        <div class="flex flex-wrap items-center gap-[0.6rem]">
+          <button id="run-reset-seen">Reset seen papers</button>
+          <span class="text-[0.85rem] text-muted">Clears every user's seen-paper history.</span>
+        </div>
+      </div>
+
+      <h2>Jobs</h2>
+      <div id="jobs" class="flex flex-col gap-[0.8rem]">
+        <p id="jobs-empty" class="text-[0.9rem] text-muted">No runs yet.</p>
+      </div>
+
+      <h2>Recent activity</h2>
+      <div class="flex justify-end">
+        <button id="refresh-log">Refresh log</button>
+      </div>
+      <table class="w-full border-collapse text-[0.82rem]">
+        <thead><tr>
+          <th class="border-b border-border px-2 py-[0.4rem] text-left font-semibold text-muted">When</th>
+          <th class="border-b border-border px-2 py-[0.4rem] text-left font-semibold text-muted">Query</th>
+          <th class="border-b border-border px-2 py-[0.4rem] text-left font-semibold text-muted">Status</th>
+          <th class="border-b border-border px-2 py-[0.4rem] text-left font-semibold text-muted">Detail</th>
+        </tr></thead>
+        <tbody id="log-body"></tbody>
+      </table>
+    </section>
+  </main>
+</Base>
+
+<script>
+  import { $user, $loading } from "../stores/auth";
+  import { signInWithGoogle, signOut } from "../lib/firebase";
+  import {
+    adminCheck, adminFields, startIngest, getJobs, getIngestLog, verifyUser,
+    startSecondaryFieldsJob, startKeywordsJob, resetSeenPapers,
+    type AdminField, type IngestJob,
+  } from "../lib/api";
+
+  const denied = document.getElementById("denied")!;
+  const deniedTitle = document.getElementById("denied-title")!;
+  const deniedMsg = document.getElementById("denied-msg")!;
+  const deniedSignin = document.getElementById("denied-signin") as HTMLButtonElement;
+  const deniedSignout = document.getElementById("denied-signout") as HTMLButtonElement;
+  const panel = document.getElementById("panel")!;
+  const sourceSel = document.getElementById("source") as HTMLSelectElement;
+  const fieldRow = document.getElementById("field-row")!;
+  const queryRow = document.getElementById("query-row")!;
+  const fieldSel = document.getElementById("field") as HTMLSelectElement;
+  const queryInput = document.getElementById("query") as HTMLInputElement;
+  const limitInput = document.getElementById("limit") as HTMLInputElement;
+  const minCitInput = document.getElementById("min-citations") as HTMLInputElement;
+  const form = document.getElementById("ingest-form") as HTMLFormElement;
+  const runBtn = document.getElementById("run") as HTMLButtonElement;
+  const jobsEl = document.getElementById("jobs")!;
+  const jobsEmpty = document.getElementById("jobs-empty")!;
+  const logBody = document.getElementById("log-body")!;
+  const refreshLogBtn = document.getElementById("refresh-log") as HTMLButtonElement;
+  const runSecondaryFieldsBtn = document.getElementById("run-secondary-fields") as HTMLButtonElement;
+  const secondaryFieldsForce = document.getElementById("secondary-fields-force") as HTMLInputElement;
+  const runKeywordsBtn = document.getElementById("run-keywords") as HTMLButtonElement;
+  const keywordsForce = document.getElementById("keywords-force") as HTMLInputElement;
+  const runResetSeenBtn = document.getElementById("run-reset-seen") as HTMLButtonElement;
+  const llmDisabledBanner = document.getElementById("llm-disabled-banner")!;
+
+  // Shared utility-class strings for runtime-built elements (global utilities,
+  // so they style JS-created nodes that scoped <style> never could).
+  const JOB_CARD = "flex flex-col gap-[0.55rem] rounded-xl border bg-card px-4 py-[0.9rem]";
+  const JOB_HEAD = "flex items-center gap-2 text-[0.95rem]";
+  const JOB_SRC = "ml-auto text-[0.82rem] text-muted";
+  const JOB_MSG = "text-[0.85rem] text-bad";
+  const STAT_B = "font-semibold text-text";
+  const SPINNER = "inline-block h-[0.8em] w-[0.8em] animate-spin rounded-full border-2 border-muted border-t-accent align-[-1px]";
+  const TD = "border-b border-border px-2 py-[0.4rem] text-left";
+
+  let jobsTimer: number | undefined;
+
+  function setSourceVisibility() {
+    fieldRow.hidden = sourceSel.value !== "field";
+    queryRow.hidden = sourceSel.value !== "query";
+  }
+  sourceSel.onchange = setSourceVisibility;
+
+  function showDenied(title: string, msg: string, opts: { signin?: boolean; signout?: boolean } = {}) {
+    panel.hidden = true;
+    deniedTitle.textContent = title;
+    deniedMsg.textContent = msg;
+    deniedSignin.hidden = !opts.signin;
+    deniedSignout.hidden = !opts.signout;
+    denied.hidden = false;
+  }
+
+  function showPanel() {
+    denied.hidden = true;
+    panel.hidden = false;
+  }
+
+  /** Grey out every LLM-dependent control when the server has LLM_ENABLED=false. */
+  function setLlmEnabled(enabled: boolean) {
+    llmDisabledBanner.hidden = enabled;
+    for (const btn of [runBtn, runSecondaryFieldsBtn, runKeywordsBtn]) {
+      btn.disabled = !enabled;
+      btn.title = enabled ? "" : "LLM features are disabled on this server.";
+    }
+  }
+
+  deniedSignin.onclick = async () => {
+    deniedSignin.disabled = true;
+    try {
+      await signInWithGoogle();
+      try { await verifyUser(); } catch (e) { console.error(e); }
+      // Auth store change re-triggers gateAndInit.
+    } catch (e) { console.error(e); }
+    deniedSignin.disabled = false;
+  };
+  deniedSignout.onclick = () => signOut();
+
+  async function gateAndInit() {
+    if ($loading.get()) {
+      // Still resolving auth — show nothing (neither panel nor a stale message).
+      denied.hidden = true;
+      panel.hidden = true;
+      return;
+    }
+    if (!$user.get()) {
+      showDenied(
+        "You don't have access",
+        "This dashboard is restricted to administrators. Please sign in.",
+        { signin: true },
+      );
+      return;
+    }
+    // Signed in — verify admin before revealing anything.
+    denied.hidden = true;
+    panel.hidden = true;
+    let ok = false;
+    let llmEnabled = true;
+    try {
+      const res = await adminCheck();
+      ok = res.admin;
+      llmEnabled = res.llmEnabled;
+    } catch (e) { console.error(e); }
+    if (!ok) {
+      showDenied(
+        "You don't have access",
+        `The account ${$user.get()?.email ?? ""} is not authorized for this dashboard.`,
+        { signout: true },
+      );
+      return;
+    }
+    setLlmEnabled(llmEnabled);
+    showPanel();
+    await loadFields();
+    await refreshJobs();
+    await loadLog();
+  }
+
+  async function loadFields() {
+    try {
+      const { fields } = await adminFields();
+      fieldSel.innerHTML = "";
+      fields.forEach((f: AdminField) => {
+        const opt = document.createElement("option");
+        opt.value = f.slug;
+        opt.textContent = f.is_seed ? f.name : `${f.name} (LLM)`;
+        fieldSel.appendChild(opt);
+      });
+    } catch (e) { console.error(e); }
+  }
+
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    runBtn.disabled = true;
+    const opts: Record<string, unknown> = {
+      limit: Number(limitInput.value),
+      min_citations: Number(minCitInput.value),
+    };
+    if (sourceSel.value === "field") opts.field = fieldSel.value;
+    else if (sourceSel.value === "query") {
+      if (!queryInput.value.trim()) {
+        flashError("Enter a query.");
+        runBtn.disabled = false;
+        return;
+      }
+      opts.query = queryInput.value.trim();
+    }
+    try {
+      const resp = await startIngest(opts);
+      if (!resp?.job_id) {
+        flashError((resp as any)?.error || "Failed to start ingestion.");
+      }
+    } catch (err) {
+      flashError(String(err));
+    }
+    runBtn.disabled = false;
+    await refreshJobs();
+  };
+
+  runSecondaryFieldsBtn.onclick = async () => {
+    runSecondaryFieldsBtn.disabled = true;
+    try {
+      const resp = await startSecondaryFieldsJob(secondaryFieldsForce.checked);
+      if (!resp?.job_id) flashError((resp as any)?.error || "Failed to start.");
+    } catch (err) {
+      flashError(String(err));
+    }
+    runSecondaryFieldsBtn.disabled = false;
+    await refreshJobs();
+  };
+
+  runKeywordsBtn.onclick = async () => {
+    runKeywordsBtn.disabled = true;
+    try {
+      const resp = await startKeywordsJob(keywordsForce.checked);
+      if (!resp?.job_id) flashError((resp as any)?.error || "Failed to start.");
+    } catch (err) {
+      flashError(String(err));
+    }
+    runKeywordsBtn.disabled = false;
+    await refreshJobs();
+  };
+
+  runResetSeenBtn.onclick = async () => {
+    if (!confirm("Clear seen-paper history for every user? This can't be undone.")) return;
+    runResetSeenBtn.disabled = true;
+    try {
+      const { deleted } = await resetSeenPapers();
+      flashInfo(`Cleared ${deleted} seen-paper record(s).`);
+    } catch (err) {
+      flashError(String(err));
+    }
+    runResetSeenBtn.disabled = false;
+  };
+
+  function flashError(msg: string) {
+    jobsEmpty.hidden = true;
+    const el = document.createElement("div");
+    // `status-error` is a JS hook (kept-on-refresh marker), not a style class.
+    el.className = `${JOB_CARD} border-[#7a2740] status-error`;
+    el.innerHTML = `<div class="${JOB_HEAD}"><strong>Couldn't start</strong></div>
+      <div class="${JOB_MSG}">${esc(msg)}</div>`;
+    jobsEl.prepend(el);
+  }
+
+  function flashInfo(msg: string) {
+    jobsEmpty.hidden = true;
+    const el = document.createElement("div");
+    el.className = `${JOB_CARD} border-[#1f6b40]`;
+    el.innerHTML = `<div class="${JOB_HEAD}"><strong class="text-ok">✓ Done</strong></div>
+      <div class="text-[0.85rem] text-muted">${esc(msg)}</div>`;
+    jobsEl.prepend(el);
+    window.setTimeout(() => el.remove(), 8000);
+  }
+
+  // Poll all jobs while any is running, so multiple runs are tracked together.
+  async function refreshJobs() {
+    try {
+      const { jobs } = await getJobs();
+      renderJobs(jobs);
+      const anyRunning = jobs.some((j) => j.status === "running");
+      clearTimeout(jobsTimer);
+      if (anyRunning) {
+        jobsTimer = window.setTimeout(refreshJobs, 2000);
+      } else {
+        await loadLog();
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  function srcLabel(j: IngestJob) {
+    if (j.kind === "secondary_fields") return j.force ? "recompute all papers" : "papers missing secondary fields";
+    if (j.kind === "keywords") return j.force ? "recompute all fields" : "fields missing keywords";
+    if (j.query) return `query: “${j.query}”`;
+    if (j.field) return `field: ${j.field}`;
+    return "all seed fields";
+  }
+
+  const JOB_TITLES: Record<string, string> = {
+    secondary_fields: "Recompute secondary fields",
+    keywords: "Recompute field keywords",
+  };
+
+  function renderJobs(jobs: IngestJob[]) {
+    // Keep manual error cards (no data-job-id) that aren't server-tracked.
+    jobsEl.querySelectorAll("[data-job-id]").forEach((n) => n.remove());
+    if (!jobs.length && !jobsEl.querySelector(".status-error")) {
+      jobsEmpty.hidden = false;
+      return;
+    }
+    jobsEmpty.hidden = true;
+    // Newest first; server already sorts but be safe.
+    const sorted = [...jobs].sort((a, b) => (a.started_at < b.started_at ? 1 : -1));
+    for (const j of sorted) {
+      jobsEl.appendChild(jobCard(j));
+    }
+  }
+
+  function jobCard(j: IngestJob): HTMLElement {
+    const border = j.status === "running" ? "border-accent"
+      : j.status === "done" ? "border-[#1f6b40]" : "border-[#7a2740]";
+    const el = document.createElement("div");
+    el.className = `${JOB_CARD} ${border}`;
+    el.dataset.jobId = j.job_id;
+
+    let head: string;
+    if (j.status === "running") {
+      head = `<span class="${SPINNER}"></span> <strong>Running</strong>`;
+    } else if (j.status === "done") {
+      head = `<strong class="text-ok">✓ Done</strong>`;
+    } else {
+      head = `<strong class="text-bad">✕ Failed</strong>`;
+    }
+
+    if (j.status === "error") {
+      el.innerHTML = `
+        <div class="${JOB_HEAD}">${head}<span class="${JOB_SRC}">${esc(srcLabel(j))}</span></div>
+        <div class="${JOB_MSG}">${esc(j.error || "Unknown error")}</div>`;
+      return el;
+    }
+
+    if (j.kind === "secondary_fields" || j.kind === "keywords") {
+      const processed = j.progress?.processed ?? j.counts?.processed ?? 0;
+      el.innerHTML = `
+        <div class="${JOB_HEAD}">${head}<strong>${JOB_TITLES[j.kind]}</strong><span class="${JOB_SRC}">${esc(srcLabel(j))}</span></div>
+        <div class="text-[0.85rem] text-muted">Processed <b class="${STAT_B}">${processed}</b></div>`;
+      return el;
+    }
+
+    const p = j.progress;
+    const fetched = p?.fetched ?? j.counts?.fetched ?? 0;
+    const processed = p?.processed ?? (j.status === "done" ? fetched : 0);
+    const ingested = p?.ingested ?? j.counts?.ingested ?? 0;
+    const skipped = p?.skipped ?? j.counts?.skipped ?? 0;
+    const errors = p?.errors ?? j.counts?.errors ?? 0;
+    const pct = fetched ? Math.round((processed / fetched) * 100) : (j.status === "done" ? 100 : 0);
+
+    const current = j.status === "running" && p?.current
+      ? `<div class="text-[0.8rem] italic text-muted">Now: ${esc(p.current)}</div>` : "";
+
+    el.innerHTML = `
+      <div class="${JOB_HEAD}">${head}<span class="${JOB_SRC}">${esc(srcLabel(j))}</span></div>
+      <div class="text-[0.85rem] text-muted">
+        Fetched <b class="${STAT_B}">${fetched}</b> · Through LLM <b class="${STAT_B}">${processed}/${fetched}</b>
+        · ingested <b class="${STAT_B}">${ingested}</b> · skipped <b class="${STAT_B}">${skipped}</b>
+        · <span class="${errors ? "text-bad" : ""}">errors <b class="${STAT_B}">${errors}</b></span>
+      </div>
+      <div class="h-2 overflow-hidden rounded-md bg-[#11151c]">
+        <div class="h-full rounded-md bg-[linear-gradient(90deg,#19b562,#3ee089)] transition-[width] duration-[400ms] ease-out" style="width:${pct}%"></div>
+      </div>
+      ${current}`;
+    return el;
+  }
+
+  async function loadLog() {
+    try {
+      const { log } = await getIngestLog();
+      logBody.innerHTML = "";
+      log.forEach((r: any) => {
+        const tr = document.createElement("tr");
+        const stColor = r.status === "error" ? "text-bad"
+          : r.status === "classified" ? "text-[#b6f0c9]" : "";
+        tr.innerHTML =
+          `<td class="${TD}">${(r.created_at || "").replace("T", " ").slice(0, 19)}</td>` +
+          `<td class="${TD}">${esc(r.query)}</td>` +
+          `<td class="${TD} ${stColor}">${esc(r.status)}</td>` +
+          `<td class="${TD}">${esc(r.detail || "")}</td>`;
+        logBody.appendChild(tr);
+      });
+    } catch (e) { console.error(e); }
+  }
+  refreshLogBtn.onclick = loadLog;
+
+  function esc(s: string) {
+    return (s ?? "").replace(/[&<>"']/g, (c) => (
+      { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!
+    ));
+  }
+
+  setSourceVisibility();
+  $loading.subscribe(gateAndInit);
+  $user.subscribe(() => { if (!$loading.get()) gateAndInit(); });
+</script>

@@ -1,0 +1,106 @@
+# ── Humanities ──────────────────────────────────────────────────────────────
+classical philology
+comparative literature
+epistemology
+ethics moral philosophy
+philosophy of mind
+religious studies
+theology
+historiography
+cultural studies
+film studies
+rhetoric and composition
+translation studies
+digital humanities
+
+# ── Social sciences ─────────────────────────────────────────────────────────
+cognitive psychology
+developmental psychology
+social psychology
+clinical psychology
+behavioral economics
+microeconomics
+macroeconomics
+econometrics
+cultural anthropology
+linguistic anthropology
+archaeological anthropology
+sociolinguistics
+comparative politics
+international relations
+public policy
+criminology
+human geography
+urban planning
+demography
+science and technology studies
+education policy
+media and communication studies
+
+# ── Mathematics & formal sciences ───────────────────────────────────────────
+number theory
+algebraic geometry
+differential geometry
+algebraic topology
+functional analysis
+partial differential equations
+dynamical systems
+probability theory
+mathematical statistics
+combinatorics
+graph theory
+category theory
+mathematical logic
+numerical analysis
+convex optimization
+stochastic processes
+game theory
+cryptography
+
+# ── Physics, chemistry & earth sciences ─────────────────────────────────────
+condensed matter physics
+quantum field theory
+astrophysics
+cosmology
+particle physics
+fluid dynamics
+statistical mechanics
+physical chemistry
+organic chemistry
+materials science
+geophysics
+climatology
+oceanography
+seismology
+planetary science
+atmospheric chemistry
+
+# ── Life sciences ───────────────────────────────────────────────────────────
+molecular biology
+evolutionary biology
+neuroscience
+genetics
+microbiology
+immunology
+ecology
+marine biology
+developmental biology
+structural biology
+epidemiology
+public health
+bioinformatics
+cancer biology
+
+# ── Engineering & applied sciences ──────────────────────────────────────────
+control theory
+robotics
+signal processing
+computer vision
+natural language processing
+reinforcement learning
+distributed systems
+computer networks
+electrical power systems
+aerospace engineering
+chemical engineering
+structural analysis civil engineering
