@@ -1,35 +1,3 @@
-# ── Humanities ──────────────────────────────────────────────────────────────
-classical philology
-comparative literature
-epistemology
-ethics moral philosophy
-philosophy of mind
-religious studies
-theology
-historiography
-cultural studies
-film studies
-rhetoric and composition
-translation studies
-digital humanities
-
-# ── Social sciences ─────────────────────────────────────────────────────────
-cognitive psychology
-developmental psychology
-social psychology
-clinical psychology
-behavioral economics
-microeconomics
-macroeconomics
-econometrics
-cultural anthropology
-linguistic anthropology
-archaeological anthropology
-sociolinguistics
-comparative politics
-international relations
-public policy
-criminology
 human geography
 urban planning
 demography

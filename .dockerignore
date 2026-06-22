@@ -1,0 +1,39 @@
+# version control / tooling
+.git
+.gitignore
+.github
+*.md
+design_doc.md
+implementation.md
+chtml.ipynb
+
+# secrets — never bake these into the image (inject at runtime)
+.env
+.env.*
+authkey.json
+admin_emails
+SEMANTIC_SCHOLAR_KEY
+secrets
+firebase_config
+
+# python venv (repo-root) + caches
+bin
+include
+lib
+lib64
+pyvenv.cfg
+__pycache__
+*.pyc
+.venv
+venv
+
+# the frontend builds in its own image
+frontend
+
+# data that lives in the mounted volume, not the image
+*.db
+*.db-journal
+.sync_state.json
+media
+
+.claude

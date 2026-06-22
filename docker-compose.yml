@@ -1,0 +1,88 @@
+services:
+  backend:
+    build: .
+    image: academictok-backend
+    restart: unless-stopped
+    expose: ["8080"]
+    environment:
+      # Production server: no Ollama here (too slow to run an LLM) — ingestion
+      # happens on a separate desktop and is synced in via scripts/sync_apply.py
+      # (see scripts/ollama_sync_run.sh). LLM_ENABLED=false makes every LLM-
+      # dependent route/job fall back to DB-only behavior instead of erroring
+      # (see config.py / ingest/pipeline.py / routes/fields.py / routes/admin.py).
+      LLM_ENABLED: "false"
+      # Firebase Admin key + admin allow-list are provided as Docker secrets.
+      FIREBASE_CRED_PATH: /run/secrets/firebase_authkey
+      ADMIN_EMAILS_PATH: /run/secrets/admin_emails
+      # The sqlite DB + extracted-figure media live on the bind-mounted volume
+      # below, not in the image, so they survive rebuilds and so the *host*
+      # (scripts/sync_apply.py, run from outside the container during a sync)
+      # can write to the exact same files at ./data/academictok.db and
+      # ./data/media.
+      DATABASE_PATH: /app/data/academictok.db
+      MEDIA_DIR: /app/data/media
+      DEBUG: "false"
+      # Route library caches (PyMuPDF/fontconfig, etc.) to the tmpfs so the
+      # read-only root filesystem doesn't break them.
+      HOME: /tmp
+      XDG_CACHE_HOME: /tmp
+    env_file:
+      - .env                       # git-ignored; CORS_ORIGINS, SEMANTIC_SCHOLAR_API_KEY, etc.
+    secrets:
+      - firebase_authkey
+      - admin_emails
+    volumes:
+      - ./data:/app/data           # sqlite DB + figures; persists across rebuilds
+    networks: [webhost]
+    read_only: true                # if something needs to write outside /tmp or the
+    tmpfs: ["/tmp"]                 # volume, comment out read_only (or add a tmpfs)
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 512m
+    cpus: "1.0"
+    # ports: ["8080:8080"]         # uncomment for direct local testing
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/api/health').status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+    image: academictok-frontend
+    restart: unless-stopped
+    expose: ["4321"]
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: "4321"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks: [webhost]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 512m
+    cpus: "1.0"
+    # ports: ["4321:4321"]         # uncomment for direct local testing
+    healthcheck:
+      test: ["CMD", "node", "-e",
+             "fetch('http://localhost:4321/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+secrets:
+  firebase_authkey:
+    file: ./secrets/authkey.json     # git-ignored; place the ROTATED key here
+  admin_emails:
+    file: ./secrets/admin_emails     # git-ignored; one allow-listed email per line
+
+networks:
+  webhost:
+    # The existing bridge network shared with NGINX & your other sites.
+    # Set PROXY_NETWORK in .env (or rename here) to your real network name —
+    # find it with `docker network ls`. To run this stack standalone instead,
+    # remove `external: true` and Compose will create the network for you.
+    external: true
+    #name: ${PROXY_NETWORK:-proxy}

@@ -1,0 +1,13 @@
+# build artifacts / deps (reinstalled & rebuilt inside the image)
+node_modules
+dist
+.astro
+
+# tooling / vcs
+.git
+.gitignore
+Dockerfile
+.dockerignore
+
+# NOTE: frontend/.env is intentionally NOT ignored — it holds only PUBLIC_*
+# values (public by design) that `astro build` inlines into the bundle.
