@@ -7,31 +7,126 @@
     <a href="/fields" class="text-muted no-underline">Fields</a>
     <a href="/admin" id="nav-admin" class="text-muted no-underline" hidden>Admin</a>
     <button
-      id="theme-toggle"
+      id="settings-btn"
       type="button"
-      aria-label="Toggle dark/light theme"
+      aria-label="Open settings"
       class="!border-0 !bg-transparent !p-1 text-[1.1rem] leading-none"
-    ></button>
+    >⚙️</button>
     <span id="nav-auth" class="inline-flex items-center gap-[0.6rem]"></span>
   </div>
 </nav>
+
+<div id="settings-backdrop" class="settings-backdrop" hidden>
+  <div class="settings-panel" role="dialog" aria-modal="true" aria-label="Settings">
+    <div class="mb-3 flex items-center justify-between">
+      <h2 class="m-0">Settings</h2>
+      <button id="settings-close" type="button" aria-label="Close settings" class="!border-0 !bg-transparent !p-1 text-[1.1rem] leading-none">✕</button>
+    </div>
+    <p class="mt-0 mb-2 text-muted text-[0.85rem]">Background</p>
+    <div id="bg-grid" class="grid grid-cols-2 gap-2"></div>
+    <p class="mt-4 mb-2 text-muted text-[0.85rem]">Accent</p>
+    <div id="accent-grid" class="flex flex-wrap gap-1"></div>
+  </div>
+</div>
 
 <script>
   import { $user, $loading } from "../stores/auth";
   import { signInWithGoogle, signOut } from "../lib/firebase";
   import { verifyUser, adminCheck } from "../lib/api";
-  import { getTheme, toggleTheme } from "../lib/theme";
+  import {
+    getBackground,
+    getAccent,
+    setBackground,
+    setAccent,
+    BACKGROUNDS,
+    ACCENTS,
+  } from "../lib/theme";
 
   const slot = document.getElementById("nav-auth")!;
   const adminLink = document.getElementById("nav-admin") as HTMLAnchorElement;
-  const themeBtn = document.getElementById("theme-toggle") as HTMLButtonElement;
+  const settingsBtn = document.getElementById("settings-btn") as HTMLButtonElement;
+  const settingsClose = document.getElementById("settings-close") as HTMLButtonElement;
+  const settingsBackdrop = document.getElementById("settings-backdrop") as HTMLDivElement;
+  const bgGrid = document.getElementById("bg-grid") as HTMLDivElement;
+  const accentGrid = document.getElementById("accent-grid") as HTMLDivElement;
 
-  function renderThemeBtn(theme: string) {
-    themeBtn.textContent = theme === "light" ? "🌙" : "☀️";
-    themeBtn.title = theme === "light" ? "Switch to dark theme" : "Switch to light theme";
+  function renderBgGrid() {
+    const currentBg = getBackground();
+    const currentAccent = getAccent();
+    bgGrid.innerHTML = "";
+    for (const bg of BACKGROUNDS) {
+      const accentHex = bg.mode === "dark"
+        ? ACCENTS.find((a) => a.id === currentAccent)!.dark
+        : ACCENTS.find((a) => a.id === currentAccent)!.light;
+
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "theme-swatch";
+      btn.setAttribute("aria-pressed", String(bg.id === currentBg));
+      btn.style.setProperty("--swatch-bg", bg.bg);
+      btn.style.setProperty("--swatch-card", bg.card);
+      btn.style.setProperty("--swatch-text", bg.text);
+      btn.style.setProperty("--swatch-accent", accentHex);
+
+      const card = document.createElement("div");
+      card.className = "theme-swatch-card";
+      const label = document.createElement("span");
+      label.className = "theme-swatch-label";
+      label.textContent = bg.label;
+      const dot = document.createElement("span");
+      dot.className = "theme-swatch-dot";
+      card.append(label, dot);
+      btn.append(card);
+
+      btn.onclick = () => {
+        setBackground(bg.id);
+        renderBgGrid();
+      };
+      bgGrid.append(btn);
+    }
   }
-  renderThemeBtn(getTheme());
-  themeBtn.onclick = () => renderThemeBtn(toggleTheme());
+
+  function renderAccentGrid() {
+    const currentBg = BACKGROUNDS.find((b) => b.id === getBackground())!;
+    const currentAccent = getAccent();
+    accentGrid.innerHTML = "";
+    for (const accent of ACCENTS) {
+      const hex = currentBg.mode === "dark" ? accent.dark : accent.light;
+
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "accent-swatch";
+      btn.title = accent.label;
+      btn.setAttribute("aria-pressed", String(accent.id === currentAccent));
+      btn.style.setProperty("--swatch-accent", hex);
+
+      const dot = document.createElement("span");
+      dot.className = "accent-swatch-dot";
+      btn.append(dot);
+
+      btn.onclick = () => {
+        setAccent(accent.id);
+        renderBgGrid();
+        renderAccentGrid();
+      };
+      accentGrid.append(btn);
+    }
+  }
+
+  renderBgGrid();
+  renderAccentGrid();
+
+  function openSettings() {
+    settingsBackdrop.hidden = false;
+  }
+  function closeSettings() {
+    settingsBackdrop.hidden = true;
+  }
+  settingsBtn.onclick = openSettings;
+  settingsClose.onclick = closeSettings;
+  settingsBackdrop.onclick = (e) => {
+    if (e.target === settingsBackdrop) closeSettings();
+  };
 
   async function refreshAdminLink() {
     let ok = false;

@@ -1,33 +1,25 @@
 @import "tailwindcss";
 
-/* Dark-theme palette (the default) exposed as Tailwind color utilities:
-   bg-card, text-muted, border-border, text-accent, etc. (mirrors the old CSS
-   custom properties). Overridden for light mode below via [data-theme]. */
+/* Gruvbox palette (https://github.com/morhetz/gruvbox) exposed as Tailwind
+   color utilities: bg-card, text-muted, border-border, text-accent, etc.
+   These are fallback defaults for first paint; src/lib/theme.ts overrides
+   them as inline custom properties on <html> once a background brightness +
+   accent color are chosen (see Base.astro's pre-paint script and
+   NavBar.astro's settings panel). */
 @theme {
-  --color-bg: #0f1115;
-  --color-card: #1a1d24;
-  --color-border: #2a2f3a;
-  --color-text: #e8eaed;
-  --color-muted: #9aa0aa;
-  --color-accent: #ff5b6e;
-  --color-accent-dim: #3a2030;
-  --color-ok: #6ee7a0;
-  --color-bad: #ffb3c0;
+  --color-bg: #282828;
+  --color-card: #3c3836;
+  --color-border: #504945;
+  --color-text: #ebdbb2;
+  --color-muted: #a89984;
+  --color-accent: #fe8019;
+  --color-ok: #b8bb26;
+  --color-bad: #fb4934;
 }
 
-/* Light-theme palette. Toggled by setting data-theme="light" on <html> (see
-   src/lib/theme.ts); persisted in localStorage and applied before first paint
-   by the inline script in Base.astro to avoid a flash of the wrong theme. */
-html[data-theme="light"] {
-  --color-bg: #f5f6f8;
-  --color-card: #ffffff;
-  --color-border: #dfe2e8;
-  --color-text: #14161a;
-  --color-muted: #5b6270;
-  --color-accent: #e0394f;
-  --color-accent-dim: #ffe1e6;
-  --color-ok: #1f9d55;
-  --color-bad: #c81e3a;
+/* Derived rather than stored, so it stays correct for any bg/accent pairing. */
+:root {
+  --color-accent-dim: color-mix(in srgb, var(--color-accent) 18%, var(--color-bg));
 }
 
 @layer base {
@@ -98,5 +90,95 @@ html[data-theme="light"] {
   }
   .primary:hover {
     border-color: var(--color-accent);
+  }
+
+  /* Settings modal backdrop + panel. Toggled via the [hidden] attribute from
+     NavBar.astro's script. */
+  .settings-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.5);
+  }
+  .settings-panel {
+    width: min(420px, calc(100vw - 2rem));
+    max-height: calc(100vh - 4rem);
+    overflow-y: auto;
+    border-radius: 0.75rem;
+    border: 1px solid var(--color-border);
+    background: var(--color-card);
+    color: var(--color-text);
+    padding: 1.25rem;
+  }
+
+  /* One swatch per background brightness: a miniature preview of that
+     background's own colors (plus the currently selected accent for the
+     dot), independent of the page's current theme. */
+  .theme-swatch {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.4rem;
+    border-radius: 0.5rem;
+    border: 2px solid transparent;
+    background: var(--swatch-bg);
+    color: var(--swatch-text);
+    padding: 0.6rem;
+    cursor: pointer;
+    text-align: left;
+  }
+  .theme-swatch:hover,
+  .theme-swatch[aria-pressed="true"] {
+    border-color: var(--swatch-accent);
+  }
+  .theme-swatch .theme-swatch-card {
+    border-radius: 0.35rem;
+    background: var(--swatch-card);
+    padding: 0.5rem 0.6rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+  .theme-swatch .theme-swatch-dot {
+    width: 0.7rem;
+    height: 0.7rem;
+    border-radius: 50%;
+    background: var(--swatch-accent);
+    flex: none;
+  }
+  .theme-swatch .theme-swatch-label {
+    font-size: 0.85rem;
+    font-weight: 600;
+  }
+
+  /* One circle per accent color choice. */
+  .accent-swatch {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.3rem;
+    border: none;
+    background: transparent;
+    padding: 0.3rem;
+    cursor: pointer;
+  }
+  .accent-swatch .accent-swatch-dot {
+    width: 1.6rem;
+    height: 1.6rem;
+    border-radius: 50%;
+    background: var(--swatch-accent);
+    border: 2px solid transparent;
+  }
+  .accent-swatch:hover .accent-swatch-dot,
+  .accent-swatch[aria-pressed="true"] .accent-swatch-dot {
+    border-color: var(--color-text);
+  }
+  .accent-swatch .accent-swatch-label {
+    font-size: 0.7rem;
+    color: var(--color-muted);
   }
 }
