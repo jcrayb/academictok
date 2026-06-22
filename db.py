@@ -105,9 +105,30 @@ CREATE TABLE IF NOT EXISTS seen_papers (
     PRIMARY KEY (uid, paper_id)
 );
 
+-- A user-created named collection of saved papers. Every user has exactly one
+-- is_default=1 collection ("Liked Papers", auto-created on first use) that
+-- doubles as their like list — liking a paper is just saving it there.
+CREATE TABLE IF NOT EXISTS collections (
+    id         INTEGER PRIMARY KEY,
+    uid        TEXT NOT NULL REFERENCES users(uid),
+    name       TEXT NOT NULL,
+    is_default INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+
+-- Papers saved into a collection.
+CREATE TABLE IF NOT EXISTS collection_papers (
+    collection_id INTEGER NOT NULL REFERENCES collections(id),
+    paper_id      INTEGER NOT NULL REFERENCES papers(id),
+    created_at    TEXT NOT NULL,
+    PRIMARY KEY (collection_id, paper_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_paper_fields_field ON paper_fields(field_id);
 CREATE INDEX IF NOT EXISTS idx_papers_s2 ON papers(s2_paper_id);
 CREATE INDEX IF NOT EXISTS idx_summaries_paper ON summaries(paper_id);
+CREATE INDEX IF NOT EXISTS idx_collections_uid ON collections(uid);
+CREATE INDEX IF NOT EXISTS idx_collection_papers_collection ON collection_papers(collection_id);
 CREATE INDEX IF NOT EXISTS idx_subscriptions_uid ON subscriptions(uid);
 CREATE INDEX IF NOT EXISTS idx_paper_images_paper ON paper_images(paper_id);
 CREATE INDEX IF NOT EXISTS idx_seen_uid ON seen_papers(uid);
@@ -219,6 +240,13 @@ def _migrate(conn) -> None:
                    SELECT fetched_at FROM papers WHERE papers.id = paper_fields.paper_id
                ) WHERE created_at IS NULL"""
         )
+
+    collection_cols = {r["name"] for r in conn.execute("PRAGMA table_info(collections)")}
+    if "is_default" not in collection_cols:
+        # "Liked Papers" is now just everyone's default collection, not a
+        # separate likes table — mark it on collections created before this.
+        conn.execute("ALTER TABLE collections ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0")
+        conn.execute("UPDATE collections SET is_default = 1 WHERE name = 'Liked Papers'")
 
 
 if __name__ == "__main__":

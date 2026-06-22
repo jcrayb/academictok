@@ -1,0 +1,80 @@
+---
+import Base from "../../layouts/Base.astro";
+import NavBar from "../../components/NavBar.astro";
+---
+
+<Base title="Your Collections · AcademicTok">
+  <NavBar />
+  <main class="mx-auto max-w-[760px] p-4">
+    <h1>Your Collections</h1>
+
+    <div id="signed-out" class="rounded-xl border border-border bg-card p-6 text-center" hidden>
+      <p class="mb-3 text-muted">Sign in to see your liked papers and collections.</p>
+      <button id="signed-out-signin" class="primary">Sign in with Google</button>
+    </div>
+
+    <div id="signed-in" hidden>
+      <form id="new-collection-form" class="mb-4 flex gap-1">
+        <input id="new-collection-name" type="text" placeholder="New collection…" required
+          class="min-w-0 flex-1 rounded-lg border border-border bg-card px-2 py-1 text-[0.9rem] text-text outline-none focus:border-accent" />
+        <button type="submit" class="primary">Create</button>
+      </form>
+      <div id="collections-grid" class="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4"></div>
+    </div>
+  </main>
+</Base>
+
+<script>
+  import { $user, $loading } from "../../stores/auth";
+  import { getCollections, createCollection, type Collection } from "../../lib/api";
+  import { promptLogin } from "../../lib/loginPrompt";
+
+  const signedOutEl = document.getElementById("signed-out")!;
+  const signedInEl = document.getElementById("signed-in")!;
+  const signedOutSignin = document.getElementById("signed-out-signin") as HTMLButtonElement;
+  const collectionsGrid = document.getElementById("collections-grid")!;
+  const newCollectionForm = document.getElementById("new-collection-form") as HTMLFormElement;
+  const newCollectionName = document.getElementById("new-collection-name") as HTMLInputElement;
+
+  signedOutSignin.onclick = async () => { await promptLogin("Sign in to see your collections."); };
+
+  function renderCollections(collections: Collection[]) {
+    collectionsGrid.innerHTML = "";
+    for (const c of collections) {
+      const el = document.createElement("a");
+      el.href = `/collections/${c.id}`;
+      el.className =
+        "block rounded-xl border border-border bg-card p-4 no-underline transition-colors duration-150 hover:border-accent";
+      el.innerHTML = `
+        <div class="text-[1rem] font-semibold text-text">${c.is_default ? "❤️ " : ""}${c.name}</div>
+        <div class="mt-1 text-[0.82rem] text-muted">${c.paper_count} paper${c.paper_count === 1 ? "" : "s"}</div>`;
+      collectionsGrid.appendChild(el);
+    }
+  }
+
+  async function load() {
+    const user = $user.get();
+    signedOutEl.hidden = !!user;
+    signedInEl.hidden = !user;
+    if (!user) return;
+    try {
+      const { collections } = await getCollections();
+      renderCollections(collections);
+    } catch (e) { console.error(e); }
+  }
+
+  newCollectionForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const name = newCollectionName.value.trim();
+    if (!name) return;
+    try {
+      const { collections } = await createCollection(name);
+      newCollectionName.value = "";
+      renderCollections(collections);
+    } catch (e) { console.error(e); }
+  });
+
+  let booted = false;
+  $loading.subscribe((loading) => { if (!loading && !booted) { booted = true; load(); } });
+  $user.subscribe(() => { if (!$loading.get()) load(); });
+</script>

@@ -7,19 +7,6 @@ import NavBar from "../components/NavBar.astro";
   <NavBar />
 
   <main class="mx-auto max-w-[640px] p-4">
-    <div class="relative mb-3">
-      <input
-        id="field-search"
-        type="search"
-        placeholder="Search fields by keyword…"
-        autocomplete="off"
-        class="w-full rounded-lg border border-border bg-card px-3 py-2 text-[0.95rem] text-text outline-none focus:border-accent"
-      />
-      <div
-        id="field-search-results"
-        class="absolute left-0 right-0 top-full z-20 mt-1 hidden max-h-[60vh] overflow-y-auto rounded-lg border-1 border-accent bg-card shadow-lg"
-      ></div>
-    </div>
     <div class="mb-2 flex items-center justify-between gap-[0.6rem]">
       <div class="flex gap-[0.6rem]">
         <button id="mode-discover" class="primary">Discover</button>
@@ -43,10 +30,11 @@ import NavBar from "../components/NavBar.astro";
 <script>
   import { $user, $loading } from "../stores/auth";
   import {
-    getMixedFeed, getSubscribedFeed, getSubscriptions, getFields,
-    type FeedItem, type MixedCursor, type Field, type FieldSort,
+    getMixedFeed, getSubscribedFeed, getSubscriptions, getLikedIds, getSavedIds,
+    type FeedItem, type MixedCursor, type FieldSort,
   } from "../lib/api";
-  import { createCard, fieldHref, type CardCtx } from "../lib/card";
+  import { createCard, type CardCtx } from "../lib/card";
+  import { promptLogin } from "../lib/loginPrompt";
 
   const feedEl = document.getElementById("feed")!;
   const statusEl = document.getElementById("status")!;
@@ -55,8 +43,6 @@ import NavBar from "../components/NavBar.astro";
   const discoverBtn = document.getElementById("mode-discover") as HTMLButtonElement;
   const subBtn = document.getElementById("mode-subscribed") as HTMLButtonElement;
   const sortSel = document.getElementById("sort") as HTMLSelectElement;
-  const fieldSearchInput = document.getElementById("field-search") as HTMLInputElement;
-  const fieldSearchResults = document.getElementById("field-search-results")!;
 
   let mode: "discover" | "subscribed" = "discover";
   let loadingPage = false;
@@ -67,12 +53,16 @@ import NavBar from "../components/NavBar.astro";
   // A per-run seed keeps the random order stable across paginated requests.
   let seed = Math.floor(Math.random() * 1e9);
   let subscribedSlugs = new Set<string>();
+  let likedPaperIds = new Set<number>();
+  let savedPaperIds = new Set<number>();
   const seen = new Set<number>();
 
   const cardCtx: CardCtx = {
     subscribedSlugs,
+    likedPaperIds,
+    savedPaperIds,
     signedIn: () => !!$user.get(),
-    onNeedLogin: () => { hintEl.textContent = "Sign in to subscribe to fields."; },
+    onNeedLogin: () => promptLogin("Sign in to subscribe, like, or save papers."),
   };
 
   function reset() {
@@ -88,10 +78,16 @@ import NavBar from "../components/NavBar.astro";
 
   async function refreshSubscriptions() {
     subscribedSlugs.clear();
+    likedPaperIds.clear();
+    savedPaperIds.clear();
     if (!$user.get()) return;
     try {
       const { subscriptions } = await getSubscriptions();
       subscriptions.forEach((s) => subscribedSlugs.add(s.slug));
+      const { paper_ids: liked } = await getLikedIds();
+      liked.forEach((id) => likedPaperIds.add(id));
+      const { paper_ids: saved } = await getSavedIds();
+      saved.forEach((id) => savedPaperIds.add(id));
     } catch (e) { console.error(e); }
   }
 
@@ -155,61 +151,6 @@ import NavBar from "../components/NavBar.astro";
     reset();
     loadMore();
   };
-
-  // ── Field search overlay ──────────────────────────────────────────────────
-  // Absolutely positioned over the page (see the .relative wrapper in the
-  // markup), so showing/hiding results never shifts the feed below it.
-
-  function escapeHtml(s: string) {
-    return (s ?? "").replace(/[&<>"']/g, (c) => (
-      { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!
-    ));
-  }
-
-  function renderFieldResults(fields: Field[]) {
-    if (!fields.length) {
-      fieldSearchResults.innerHTML =
-        '<p class="p-3 text-[0.85rem] text-muted">No fields match.</p>';
-      fieldSearchResults.classList.remove("hidden");
-      return;
-    }
-    fieldSearchResults.innerHTML = fields.map((f) => `
-      <a href="${fieldHref(f.slug)}" class="block border-b border-border p-3 no-underline last:border-b-0 hover:bg-bg">
-        <div class="text-[0.95rem] font-semibold text-text">${escapeHtml(f.name)}</div>
-        <div class="mt-[0.15rem] text-[0.82rem] text-muted">${escapeHtml(f.description ?? "")}</div>
-      </a>`).join("");
-    fieldSearchResults.classList.remove("hidden");
-  }
-
-  function hideFieldResults() {
-    fieldSearchResults.classList.add("hidden");
-  }
-
-  let fieldSearchTimer: ReturnType<typeof setTimeout>;
-  fieldSearchInput.addEventListener("input", () => {
-    clearTimeout(fieldSearchTimer);
-    const q = fieldSearchInput.value.trim();
-    if (!q) { hideFieldResults(); return; }
-    fieldSearchTimer = setTimeout(async () => {
-      try {
-        const { fields } = await getFields(q);
-        renderFieldResults(fields);
-      } catch (e) { console.error(e); }
-    }, 200);
-  });
-
-  fieldSearchInput.addEventListener("focus", () => {
-    if (fieldSearchInput.value.trim()) fieldSearchResults.classList.remove("hidden");
-  });
-
-  // Close when clicking outside the search box / results.
-  document.addEventListener("click", (e) => {
-    const t = e.target as Node;
-    if (!fieldSearchInput.contains(t) && !fieldSearchResults.contains(t)) hideFieldResults();
-  });
-  fieldSearchInput.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") { hideFieldResults(); fieldSearchInput.blur(); }
-  });
 
   new IntersectionObserver((entries) => {
     if (entries[0].isIntersecting) loadMore();

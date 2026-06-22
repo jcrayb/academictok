@@ -38,9 +38,10 @@ const { field } = Astro.params;
   import { $user, $loading } from "../../../stores/auth";
   import {
     getFieldFeed, discoverField, getSubscriptions, subscribe, unsubscribe,
-    type FeedItem, type FieldSort,
+    getLikedIds, getSavedIds, type FeedItem, type FieldSort,
   } from "../../../lib/api";
   import { createCard, type CardCtx } from "../../../lib/card";
+  import { promptLogin } from "../../../lib/loginPrompt";
 
   const feedEl = document.getElementById("feed")!;
   const statusEl = document.getElementById("status")!;
@@ -70,11 +71,15 @@ const { field } = Astro.params;
   let seed = Math.floor(Math.random() * 1e9);
   const seen = new Set<number>();
   const subscribedSlugs = new Set<string>();
+  const likedPaperIds = new Set<number>();
+  const savedPaperIds = new Set<number>();
 
   const cardCtx: CardCtx = {
     subscribedSlugs,
+    likedPaperIds,
+    savedPaperIds,
     signedIn: () => !!$user.get(),
-    onNeedLogin: () => { hintEl.textContent = "Sign in to subscribe to this field."; },
+    onNeedLogin: () => promptLogin("Sign in to subscribe, like, or save papers."),
     // One Join button by the title handles this whole page, so cards omit theirs.
     showSubscribe: false,
   };
@@ -110,10 +115,16 @@ const { field } = Astro.params;
 
   async function refreshSubscriptions() {
     subscribedSlugs.clear();
+    likedPaperIds.clear();
+    savedPaperIds.clear();
     if ($user.get()) {
       try {
         const { subscriptions } = await getSubscriptions();
         subscriptions.forEach((s) => subscribedSlugs.add(s.slug));
+        const { paper_ids: liked } = await getLikedIds();
+        liked.forEach((id) => likedPaperIds.add(id));
+        const { paper_ids: saved } = await getSavedIds();
+        saved.forEach((id) => savedPaperIds.add(id));
       } catch (e) { console.error(e); }
     }
     renderJoin();

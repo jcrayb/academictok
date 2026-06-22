@@ -46,6 +46,12 @@ OLLAMA_FAST_MODEL = _env("OLLAMA_FAST_MODEL", "")
 # conservative: prefer broader existing fields over narrow variants (e.g.
 # "battery-chemistry" over a new "organic-zinc-battery-chemistry").
 NEW_FIELD_SENSITIVITY = max(0.0, min(1.0, float(_env("NEW_FIELD_SENSITIVITY", "0.3"))))
+# Cap on how many fields the classifier prompt lists at once. As the field list
+# grows into the hundreds, sending all of them blows past OLLAMA_NUM_CTX (the
+# prompt gets silently truncated, so the model may never even see the paper's
+# title/summary). Above this many fields, only the most relevant subset (by
+# keyword/word overlap with the paper) is sent.
+CLASSIFIER_MAX_FIELDS = int(_env("CLASSIFIER_MAX_FIELDS", "40"))
 # Concurrent Ollama requests when summarizing a discovery batch.
 DISCOVER_CONCURRENCY = int(_env("DISCOVER_CONCURRENCY", "4"))
 # Papers fetched per discovery scroll. Bigger = fewer stalls while scrolling.
@@ -112,3 +118,8 @@ DEBUG = _env("DEBUG", "false").lower() == "true"
 DEFAULT_PAGE_SIZE = 20
 # Mixed-feed ratio: fraction of items drawn from subscribed fields.
 MIXED_SUBSCRIBED_RATIO = 0.7
+
+# Collections
+# How many of a user's collections the navbar dropdown lists directly, before
+# a separate "explore all collections" link is needed.
+MAX_COLLECTIONS_IN_MENU = int(_env("MAX_COLLECTIONS_IN_MENU", "5"))

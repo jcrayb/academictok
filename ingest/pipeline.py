@@ -94,7 +94,9 @@ def ingest_query(query, limit=20, min_citations=0, on_progress=None, fast=False,
 
 
 def _extract_pdf(paper):
-    """Best-effort: fetch + parse the open-access PDF. Returns (text, figures).
+    """Best-effort: fetch + parse the open-access PDF (or, if that link is
+    actually an HTML article page, scrape that instead — see
+    ``pdf_extract.fetch_and_extract``). Returns (text, figures).
 
     The full-text and figure halves are toggled independently; when both are
     disabled the PDF isn't downloaded at all (the expensive part).
@@ -105,11 +107,8 @@ def _extract_pdf(paper):
             or not (want_text or want_figs)):
         return "", []
     try:
-        pdf_bytes = pdf_extract.fetch_pdf(paper["pdf_url"])
-        if not pdf_bytes:
-            return "", []
-        result = pdf_extract.extract(
-            pdf_bytes, want_text=want_text, want_figures=want_figs
+        result = pdf_extract.fetch_and_extract(
+            paper["pdf_url"], want_text=want_text, want_figures=want_figs
         )
         return result.get("text", ""), result.get("figures", [])
     except Exception as e:  # noqa: BLE001 - never let PDF issues drop a paper
@@ -331,11 +330,14 @@ def discover_field(slug, limit=None):
     return new_ids, exhausted
 
 
-def upgrade_pending_summaries(limit=50):
+def upgrade_pending_summaries(limit=50, on_paper=None):
     """Re-summarize fast-model discovery papers with the full OLLAMA_MODEL.
 
     Returns the number upgraded. Intended to run on a schedule
     (scripts/upgrade_summaries.py) so live-discovered cards become high quality.
+
+    ``on_paper(info)`` is called after each paper with a dict: paper_id, title,
+    success — so a caller can print/log progress live.
     """
     with get_conn() as conn:
         rows = models.pending_full_summaries(conn, limit)
@@ -347,12 +349,16 @@ def upgrade_pending_summaries(limit=50):
             s = summarize(paper, model=config.OLLAMA_MODEL)
         except Exception as e:  # noqa: BLE001 - leave the flag set, retry next run
             logger.warning("Summary upgrade failed for paper %s: %s", row["paper_id"], e)
+            if on_paper:
+                on_paper({"paper_id": row["paper_id"], "title": row["title"], "success": False})
             continue
         with get_conn() as conn:
             models.update_short_summary(
                 conn, row["paper_id"], s["title"], s["body"], s["model"]
             )
         upgraded += 1
+        if on_paper:
+            on_paper({"paper_id": row["paper_id"], "title": row["title"], "success": True})
     return upgraded
 
 
@@ -364,11 +370,15 @@ def enrich_paper(paper_id, want_long=True, want_imgs=True):
     ``want_long`` writes a missing detailed summary, or upgrades an abstract-only
     one once full text is reachable; ``want_imgs`` pulls figures the first time.
     The PDF is fetched only for a requested, enabled half.
+
+    Returns a dict describing what happened: paper_id, title, pdf_downloaded
+    (True/False if a fetch was attempted, None if no fetch was needed), and
+    summary_created (whether a detailed summary was newly written this call).
     """
     with get_conn() as conn:
         st = models.paper_enrichment_state(conn, paper_id)
     if not st:
-        return
+        return None
 
     raw = {"title": st["title"], "abstract": st["abstract"] or "",
            "venue": st["venue"] or "", "year": st["year"]}
@@ -381,20 +391,22 @@ def enrich_paper(paper_id, want_long=True, want_imgs=True):
     fetch_text = want_long and config.ENABLE_PDF_FULLTEXT
     fetch_figs = want_imgs and config.ENABLE_FIGURE_EXTRACT
     full_text, figures = "", []
+    pdf_downloaded = None
     if config.ENABLE_PDF_INGEST and st["pdf_url"] and (fetch_text or fetch_figs):
         try:
-            pdf_bytes = pdf_extract.fetch_pdf(st["pdf_url"])
-            if pdf_bytes:
-                result = pdf_extract.extract(
-                    pdf_bytes, want_text=fetch_text, want_figures=fetch_figs
-                )
-                full_text, figures = result.get("text", ""), result.get("figures", [])
+            result = pdf_extract.fetch_and_extract(
+                st["pdf_url"], want_text=fetch_text, want_figures=fetch_figs
+            )
+            pdf_downloaded = result.get("downloaded", False)
+            full_text, figures = result.get("text", ""), result.get("figures", [])
         except Exception as e:  # noqa: BLE001
+            pdf_downloaded = False
             logger.warning("Enrich PDF failed for paper %s: %s", paper_id, e)
 
     # Detailed summary: write when missing, or upgrade abstract-only once we have
     # full text. Skip the LLM call when neither applies.
     has_fulltext = bool(full_text and full_text.strip())
+    summary_created = False
     if want_long and ((not have_long and (has_fulltext or raw["abstract"]))
                       or (not is_fulltext and has_fulltext)):
         try:
@@ -402,6 +414,7 @@ def enrich_paper(paper_id, want_long=True, want_imgs=True):
             source = "fulltext" if has_fulltext else "abstract"
             with get_conn() as conn:
                 models.set_long_summary(conn, paper_id, long_body, source)
+            summary_created = True
         except Exception as e:  # noqa: BLE001
             logger.warning("Enrich detailed summary failed for paper %s: %s", paper_id, e)
 
@@ -417,15 +430,23 @@ def enrich_paper(paper_id, want_long=True, want_imgs=True):
     with get_conn() as conn:
         models.mark_enriched(conn, paper_id)
 
+    return {"paper_id": paper_id, "title": st["title"],
+            "pdf_downloaded": pdf_downloaded, "summary_created": summary_created}
 
-def enrich_pending(limit=20):
+
+def enrich_pending(limit=20, on_paper=None):
     """Precompute detailed summaries (and figures) for papers that lack them, so
     opening a post is instant. Returns the number processed. Runs on a schedule.
+
+    ``on_paper(info)`` is called after each paper with the dict returned by
+    ``enrich_paper`` — so a caller can print/log progress live.
     """
     with get_conn() as conn:
         ids = models.papers_needing_enrichment(conn, limit)
     for paper_id in ids:
-        enrich_paper(paper_id, want_long=True, want_imgs=True)
+        info = enrich_paper(paper_id, want_long=True, want_imgs=True)
+        if on_paper and info:
+            on_paper(info)
     return len(ids)
 
 
@@ -475,7 +496,8 @@ def backfill_secondary_fields(limit=50, after_id=0, force=False):
     return len(rows), last_id
 
 
-def reclassify_primary_fields(limit=50, after_id=0, on_paper=None, sensitivity=None):
+def reclassify_primary_fields(limit=50, after_id=0, on_paper=None, sensitivity=None,
+                               field_slugs=None):
     """Re-run the full primary-field classifier (with permission to create new
     fields) over every paper, replacing its primary AND secondary field links
     with a fresh decision. Useful after tuning the classifier's bar for
@@ -486,6 +508,9 @@ def reclassify_primary_fields(limit=50, after_id=0, on_paper=None, sensitivity=N
     ``sensitivity`` overrides config.NEW_FIELD_SENSITIVITY for this run (0.0 =
     never create a new field, 1.0 = create one liberally).
 
+    ``field_slugs``, if given, restricts to papers whose current primary field
+    slug is in that list, instead of every paper.
+
     ``on_paper(info)`` is called after each paper with a dict: paper_id, title,
     old_primary_slug, new_field_slug, new_field_name, created_new,
     secondary_slugs — so a caller can print/log progress live.
@@ -494,7 +519,8 @@ def reclassify_primary_fields(limit=50, after_id=0, on_paper=None, sensitivity=N
     forward via ``after_id``.
     """
     with get_conn() as conn:
-        rows = models.papers_for_reclassify(conn, limit, after_id=after_id)
+        rows = models.papers_for_reclassify(conn, limit, after_id=after_id,
+                                             field_slugs=field_slugs)
 
     last_id = after_id
     for row in rows:

@@ -1,18 +1,40 @@
 ---
 // Auth-aware navigation bar. Hydrated by the inline script below.
 ---
-<nav class="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-bg px-[1.2rem] py-[0.8rem]">
-  <a href="/" class="text-[1.2rem] font-extrabold text-text no-underline">academic<span class="text-accent">tok</span></a>
-  <div class="flex items-center gap-4">
-    <a href="/fields" class="text-muted no-underline">Fields</a>
-    <a href="/admin" id="nav-admin" class="text-muted no-underline" hidden>Admin</a>
-    <button
-      id="settings-btn"
-      type="button"
-      aria-label="Open settings"
-      class="!border-0 !bg-transparent !p-1 text-[1.1rem] leading-none"
-    >⚙️</button>
-    <span id="nav-auth" class="inline-flex items-center gap-[0.6rem]"></span>
+<nav class="sticky top-0 z-10 flex items-center gap-3 border-b border-border bg-bg px-[1.2rem] py-[0.8rem]">
+  <a href="/" class="shrink-0 text-[1.2rem] font-extrabold text-text no-underline">academic<span class="text-accent">tok</span></a>
+
+  <div class="relative mx-1 min-w-0 max-w-[420px] flex-1">
+    <input
+      id="nav-search"
+      type="search"
+      placeholder="Search fields by keyword…"
+      autocomplete="off"
+      class="w-full rounded-lg border border-border bg-card px-3 py-[0.4rem] pr-[5.5rem] text-[0.9rem] text-text outline-none focus:border-accent"
+    />
+    <select
+      id="nav-search-mode"
+      aria-label="Search mode"
+      class="absolute right-1 top-1/2 -translate-y-1/2 rounded-md border border-border bg-card px-1.5 py-[0.15rem] text-[0.76rem] text-text outline-none focus:border-accent"
+    >
+      <option value="fields">Fields</option>
+      <option value="papers">Papers</option>
+    </select>
+    <div
+      id="nav-search-results"
+      class="absolute left-0 right-0 top-full z-20 mt-1 flex max-h-[60vh] flex-col rounded-lg border-1 border-accent bg-card shadow-lg"
+      hidden
+    >
+      <div id="nav-search-results-list" class="min-h-0 flex-1 overflow-y-auto"></div>
+      <a
+        href="/fields"
+        class="block shrink-0 rounded-b-lg border-t border-border px-3 py-2 text-center text-[0.85rem] text-accent no-underline hover:bg-bg"
+      >→ See all fields</a>
+    </div>
+  </div>
+
+  <div class="flex shrink-0 items-center gap-4">
+    <span id="nav-auth" class="relative inline-flex items-center gap-[0.6rem]"></span>
   </div>
 </nav>
 
@@ -32,7 +54,11 @@
 <script>
   import { $user, $loading } from "../stores/auth";
   import { signInWithGoogle, signOut } from "../lib/firebase";
-  import { verifyUser, adminCheck } from "../lib/api";
+  import {
+    verifyUser, adminCheck, getFields, searchPapers, getCollections,
+    type Field, type FeedItem,
+  } from "../lib/api";
+  import { fieldHref, paperHref } from "../lib/card";
   import {
     getBackground,
     getAccent,
@@ -42,13 +68,19 @@
     ACCENTS,
   } from "../lib/theme";
 
+  // How many of a user's collections the dropdown lists directly, before
+  // "Explore all collections" is the only way to see the rest.
+  const MAX_COLLECTIONS_IN_MENU = 5;
+
   const slot = document.getElementById("nav-auth")!;
-  const adminLink = document.getElementById("nav-admin") as HTMLAnchorElement;
-  const settingsBtn = document.getElementById("settings-btn") as HTMLButtonElement;
   const settingsClose = document.getElementById("settings-close") as HTMLButtonElement;
   const settingsBackdrop = document.getElementById("settings-backdrop") as HTMLDivElement;
   const bgGrid = document.getElementById("bg-grid") as HTMLDivElement;
   const accentGrid = document.getElementById("accent-grid") as HTMLDivElement;
+  const searchInput = document.getElementById("nav-search") as HTMLInputElement;
+  const searchModeSelect = document.getElementById("nav-search-mode") as HTMLSelectElement;
+  const searchResults = document.getElementById("nav-search-results") as HTMLElement;
+  const searchResultsList = document.getElementById("nav-search-results-list")!;
 
   function renderBgGrid() {
     const currentBg = getBackground();
@@ -122,33 +154,88 @@
   function closeSettings() {
     settingsBackdrop.hidden = true;
   }
-  settingsBtn.onclick = openSettings;
   settingsClose.onclick = closeSettings;
   settingsBackdrop.onclick = (e) => {
     if (e.target === settingsBackdrop) closeSettings();
   };
 
-  async function refreshAdminLink() {
-    let ok = false;
-    if ($user.get()) {
-      try { ok = await adminCheck(); } catch { ok = false; }
+  // ── Username dropdown: collections preview, admin, themes, sign out ────────
+
+  function closeUserMenu() {
+    document.getElementById("user-menu")?.remove();
+  }
+
+  async function openUserMenu(anchor: HTMLElement) {
+    if (document.getElementById("user-menu")) { closeUserMenu(); return; }
+
+    const menu = document.createElement("div");
+    menu.id = "user-menu";
+    menu.className =
+      "absolute right-0 top-full z-30 mt-2 w-60 rounded-lg border border-accent bg-card p-2 shadow-lg";
+    menu.innerHTML = `<p class="m-0 px-1 py-1 text-[0.78rem] text-muted">Loading collections…</p>`;
+    anchor.appendChild(menu);
+
+    const onDocClick = (e: MouseEvent) => {
+      if (!menu.contains(e.target as Node) && e.target !== anchor) {
+        closeUserMenu();
+        document.removeEventListener("click", onDocClick);
+      }
+    };
+    document.addEventListener("click", onDocClick);
+
+    let collectionsHtml = "";
+    let isAdmin = false;
+    try {
+      const [{ collections }, admin] = await Promise.all([
+        getCollections(MAX_COLLECTIONS_IN_MENU),
+        adminCheck(),
+      ]);
+      isAdmin = admin.admin;
+      collectionsHtml = collections.length
+        ? collections.map((c) => `
+            <a href="/collections/${c.id}" class="block rounded-md px-2 py-[0.35rem] text-[0.85rem] text-text no-underline hover:bg-bg">
+              ${c.is_default ? "❤️ " : ""}${c.name} <span class="text-muted">(${c.paper_count})</span>
+            </a>`).join("")
+        : `<p class="m-0 mb-1 px-2 text-[0.78rem] text-muted">No collections yet.</p>`;
+    } catch (e) {
+      console.error(e);
+      collectionsHtml = `<p class="m-0 mb-1 px-2 text-[0.78rem] text-muted">Failed to load collections.</p>`;
     }
-    adminLink.hidden = !ok;
+
+    menu.innerHTML = `
+      <p class="m-0 mb-1 px-2 text-[0.72rem] uppercase tracking-wide text-muted">Collections</p>
+      ${collectionsHtml}
+      <a href="/collections" class="mt-1 block rounded-md px-2 py-[0.35rem] text-[0.85rem] text-accent no-underline hover:bg-bg">Explore all collections →</a>
+      <div class="mt-2 border-t border-border pt-2">
+        ${isAdmin ? '<a href="/admin" class="block rounded-md px-2 py-[0.35rem] text-[0.85rem] text-text no-underline hover:bg-bg">Admin</a>' : ""}
+        <button id="user-menu-theme" class="block w-full rounded-md px-2 py-[0.35rem] text-left text-[0.85rem] text-text hover:bg-bg">🎨 Themes</button>
+        <button id="user-menu-signout" class="block w-full rounded-md px-2 py-[0.35rem] text-left text-[0.85rem] text-text hover:bg-bg">Sign out</button>
+      </div>`;
+
+    (menu.querySelector("#user-menu-theme") as HTMLButtonElement).onclick = () => {
+      closeUserMenu();
+      openSettings();
+    };
+    (menu.querySelector("#user-menu-signout") as HTMLButtonElement).onclick = () => {
+      closeUserMenu();
+      signOut();
+    };
   }
 
   function render() {
     if ($loading.get()) { slot.textContent = "…"; return; }
     const user = $user.get();
-    refreshAdminLink();
     slot.innerHTML = "";
+    closeUserMenu();
     if (user) {
-      const name = document.createElement("span");
-      name.className = "text-muted text-[0.9rem]";
-      name.textContent = user.displayName || user.email || "signed in";
-      const out = document.createElement("button");
-      out.textContent = "Sign out";
-      out.onclick = () => signOut();
-      slot.append(name, out);
+      const nameBtn = document.createElement("button");
+      nameBtn.className = "!border-0 !bg-transparent text-[0.9rem] text-text";
+      nameBtn.textContent = user.displayName || user.email || "signed in";
+      nameBtn.onclick = (e) => {
+        e.stopPropagation();
+        openUserMenu(slot);
+      };
+      slot.append(nameBtn);
     } else {
       const inb = document.createElement("button");
       inb.className = "primary";
@@ -163,4 +250,81 @@
 
   $loading.subscribe(render);
   $user.subscribe(render);
+
+  // ── Field/paper search ───────────────────────────────────────────────────
+  // Absolutely positioned over the page, so showing/hiding results never
+  // shifts the rest of the nav or page below it.
+
+  function searchMode(): "fields" | "papers" {
+    return searchModeSelect.value === "papers" ? "papers" : "fields";
+  }
+
+  function escapeHtml(s: string) {
+    return (s ?? "").replace(/[&<>"']/g, (c) => (
+      { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!
+    ));
+  }
+
+  function renderFieldResults(fields: Field[]) {
+    searchResultsList.innerHTML = fields.length
+      ? fields.map((f) => `
+          <a href="${fieldHref(f.slug)}" class="block border-b border-border p-3 no-underline last:border-b-0 hover:bg-bg">
+            <div class="text-[0.95rem] font-semibold text-text">${escapeHtml(f.name)}</div>
+            <div class="mt-[0.15rem] text-[0.82rem] text-muted">${escapeHtml(f.description ?? "")}</div>
+          </a>`).join("")
+      : '<p class="p-3 text-[0.85rem] text-muted">No fields match.</p>';
+    searchResults.hidden = false;
+  }
+
+  function renderPaperResults(items: FeedItem[]) {
+    searchResultsList.innerHTML = items.length
+      ? items.map((it) => `
+          <a href="${paperHref(it.field.slug, it.s2_paper_id)}" class="block border-b border-border p-3 no-underline last:border-b-0 hover:bg-bg">
+            <div class="text-[0.95rem] font-semibold text-text">${escapeHtml(it.paper_title)}</div>
+            <div class="mt-[0.15rem] text-[0.82rem] text-muted">r/${escapeHtml(it.field.slug)} · ${it.year ?? ""}</div>
+          </a>`).join("")
+      : '<p class="p-3 text-[0.85rem] text-muted">No papers match.</p>';
+    searchResults.hidden = false;
+  }
+
+  function hideSearchResults() {
+    searchResults.hidden = true;
+  }
+
+  let searchTimer: ReturnType<typeof setTimeout>;
+  searchInput.addEventListener("input", () => {
+    clearTimeout(searchTimer);
+    const q = searchInput.value.trim();
+    if (!q) { hideSearchResults(); return; }
+    searchTimer = setTimeout(async () => {
+      try {
+        if (searchMode() === "papers") {
+          const { items } = await searchPapers(q);
+          renderPaperResults(items);
+        } else {
+          const { fields } = await getFields(q);
+          renderFieldResults(fields);
+        }
+      } catch (e) { console.error(e); }
+    }, 200);
+  });
+
+  searchModeSelect.addEventListener("change", () => {
+    searchInput.placeholder = searchMode() === "papers"
+      ? "Search papers by title…"
+      : "Search fields by keyword…";
+    searchInput.dispatchEvent(new Event("input"));
+  });
+
+  searchInput.addEventListener("focus", () => {
+    if (searchInput.value.trim()) searchResults.hidden = false;
+  });
+
+  document.addEventListener("click", (e) => {
+    const t = e.target as Node;
+    if (!searchInput.contains(t) && !searchResults.contains(t)) hideSearchResults();
+  });
+  searchInput.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { hideSearchResults(); searchInput.blur(); }
+  });
 </script>

@@ -21,10 +21,35 @@ const { field } = Astro.params;
 </Base>
 
 <script>
-  import { getPaper, API_BASE, type PaperDetail, type PaperImage } from "../../../lib/api";
-  import { fieldHref } from "../../../lib/card";
+  import { $user, $loading } from "../../../stores/auth";
+  import {
+    getPaper, getLikedIds, getSavedIds, API_BASE, type PaperDetail, type PaperImage,
+  } from "../../../lib/api";
+  import { fieldHref, createLikeSaveControls, type CardCtx } from "../../../lib/card";
+  import { promptLogin } from "../../../lib/loginPrompt";
 
   const root = document.getElementById("paper")!;
+  const likedPaperIds = new Set<number>();
+  const savedPaperIds = new Set<number>();
+  const likeSaveCtx: CardCtx = {
+    subscribedSlugs: new Set(),
+    likedPaperIds,
+    savedPaperIds,
+    signedIn: () => !!$user.get(),
+    onNeedLogin: () => promptLogin("Sign in to like or save papers."),
+  };
+
+  async function refreshLikedSaved() {
+    likedPaperIds.clear();
+    savedPaperIds.clear();
+    if (!$user.get()) return;
+    try {
+      const { paper_ids: liked } = await getLikedIds();
+      liked.forEach((id) => likedPaperIds.add(id));
+      const { paper_ids: saved } = await getSavedIds();
+      saved.forEach((id) => savedPaperIds.add(id));
+    } catch (e) { console.error(e); }
+  }
   // Path: /r/<field>/<id>
   const parts = location.pathname.split("/").filter(Boolean);
   const id = decodeURIComponent(parts[2] || "");
@@ -81,6 +106,7 @@ const { field } = Astro.params;
 
   function render(p: PaperDetail) {
     document.title = `${p.summary_title} · AcademicTok`;
+    root.dataset.paperId = String(p.paper_id);
     const all = p.fields || [];
     const primary = all.find((f) => f.is_primary) || all[0];
     const secondary = all.filter((f) => f !== primary);
@@ -106,17 +132,22 @@ const { field } = Astro.params;
         <div class="font-semibold">${escapeHtml(p.paper_title)}</div>
         <div class="mt-[0.15rem] text-[0.88rem] text-muted">${escapeHtml(authorsLine(p.authors))}</div>
         <div class="mt-[0.15rem] text-[0.88rem] text-muted">${escapeHtml(p.venue || "")} ${p.year ?? ""} · ${p.citation_count} citations</div>
+        <div id="like-save-slot" class="mt-[0.6rem]"></div>
       </div>
       ${long}
       ${figuresBlock(p.images)}
       <h2 class="${H2}">Source</h2>
       <p><a href="${p.url}" target="_blank" rel="noopener">Read the original paper ↗</a></p>`;
+    root.querySelector("#like-save-slot")!.appendChild(
+      createLikeSaveControls(p.paper_id, likeSaveCtx)
+    );
     typeset(root);
   }
 
   async function load() {
     if (!id) { root.innerHTML = `<p class="${LOADING}">No paper specified.</p>`; return; }
     try {
+      await refreshLikedSaved();
       // First call returns fast (short summary) and kicks off background
       // generation of the detailed summary.
       const p = await getPaper(id);
@@ -145,5 +176,17 @@ const { field } = Astro.params;
       render({ ...p, enriching: false });
     } catch { /* leave the last render in place */ }
   }
-  load();
+
+  // Wait for auth state to resolve before the first load, so a returning
+  // signed-in user's liked/saved state is correct from the first render —
+  // re-run if they sign in/out afterwards.
+  let booted = false;
+  $loading.subscribe((loading) => { if (!loading && !booted) { booted = true; load(); } });
+  $user.subscribe(async () => {
+    if ($loading.get() || !booted) return;
+    await refreshLikedSaved();
+    root.querySelector("#like-save-slot")?.replaceChildren(
+      createLikeSaveControls(Number(root.dataset.paperId), likeSaveCtx)
+    );
+  });
 </script>

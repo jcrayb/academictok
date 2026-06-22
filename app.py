@@ -33,6 +33,7 @@ def create_app():
 
     from routes.admin import bp as admin_bp
     from routes.auth_routes import bp as auth_bp
+    from routes.collections import bp as collections_bp
     from routes.feed import bp as feed_bp
     from routes.fields import bp as fields_bp
     from routes.media import bp as media_bp
@@ -44,6 +45,7 @@ def create_app():
     app.register_blueprint(feed_bp)
     app.register_blueprint(admin_bp)
     app.register_blueprint(media_bp)
+    app.register_blueprint(collections_bp)
 
     @app.route("/api/health")
     def health():
