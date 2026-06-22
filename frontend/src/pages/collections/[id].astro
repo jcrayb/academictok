@@ -1,0 +1,80 @@
+---
+import Base from "../../layouts/Base.astro";
+import NavBar from "../../components/NavBar.astro";
+---
+
+<Base title="Collection · AcademicTok">
+  <NavBar />
+  <main class="mx-auto max-w-[720px] px-4 pt-4 pb-16">
+    <a href="/collections" class="mb-4 inline-block text-[0.9rem] text-muted no-underline">← All collections</a>
+
+    <div id="signed-out" class="rounded-xl border border-border bg-card p-6 text-center" hidden>
+      <p class="mb-3 text-muted">Sign in to see this collection.</p>
+      <button id="signed-out-signin" class="primary">Sign in with Google</button>
+    </div>
+
+    <div id="signed-in" hidden>
+      <h1 id="collection-name">Collection</h1>
+      <div id="items" class="flex flex-col gap-4"></div>
+      <p id="empty" class="text-muted" hidden>No papers saved here yet.</p>
+      <p id="not-found" class="text-muted" hidden>This collection doesn't exist (or isn't yours).</p>
+    </div>
+  </main>
+</Base>
+
+<script>
+  import { $user, $loading } from "../../stores/auth";
+  import { getCollection, getLikedIds, getSavedIds } from "../../lib/api";
+  import { createCard, type CardCtx } from "../../lib/card";
+  import { promptLogin } from "../../lib/loginPrompt";
+
+  const signedOutEl = document.getElementById("signed-out")!;
+  const signedInEl = document.getElementById("signed-in")!;
+  const signedOutSignin = document.getElementById("signed-out-signin") as HTMLButtonElement;
+  const nameEl = document.getElementById("collection-name")!;
+  const itemsEl = document.getElementById("items")!;
+  const emptyEl = document.getElementById("empty")!;
+  const notFoundEl = document.getElementById("not-found")!;
+
+  signedOutSignin.onclick = async () => { await promptLogin("Sign in to see this collection."); };
+
+  const collectionId = Number(location.pathname.split("/").filter(Boolean)[1]);
+
+  async function load() {
+    const user = $user.get();
+    signedOutEl.hidden = !!user;
+    signedInEl.hidden = !user;
+    if (!user) return;
+
+    const cardCtx: CardCtx = {
+      subscribedSlugs: new Set(),
+      likedPaperIds: new Set(),
+      savedPaperIds: new Set(),
+      signedIn: () => !!$user.get(),
+      onNeedLogin: () => promptLogin("Sign in to like or save papers."),
+    };
+    try {
+      const [{ paper_ids: liked }, { paper_ids: saved }] = await Promise.all([
+        getLikedIds(), getSavedIds(),
+      ]);
+      liked.forEach((id) => cardCtx.likedPaperIds!.add(id));
+      saved.forEach((id) => cardCtx.savedPaperIds!.add(id));
+    } catch (e) { console.error(e); }
+
+    try {
+      const { collection, items } = await getCollection(collectionId);
+      if (!collection) { notFoundEl.hidden = false; return; }
+      nameEl.textContent = collection.name;
+      itemsEl.innerHTML = "";
+      emptyEl.hidden = items.length > 0;
+      for (const item of items) itemsEl.appendChild(createCard(item, cardCtx));
+    } catch (e) {
+      console.error(e);
+      notFoundEl.hidden = false;
+    }
+  }
+
+  let booted = false;
+  $loading.subscribe((loading) => { if (!loading && !booted) { booted = true; load(); } });
+  $user.subscribe(() => { if (!$loading.get()) load(); });
+</script>

@@ -7,12 +7,22 @@ import NavBar from "../components/NavBar.astro";
   <NavBar />
   <main class="mx-auto max-w-[760px] p-4">
     <h1>Fields</h1>
-    <input
-      id="search"
-      type="search"
-      placeholder="Search fields by keyword…"
-      class="mb-4 w-full rounded-lg border border-border bg-card px-3 py-2 text-[0.95rem] text-text outline-none focus:border-accent"
-    />
+    <div class="relative mb-4">
+      <input
+        id="search"
+        type="search"
+        placeholder="Search fields by keyword…"
+        class="w-full rounded-lg border border-border bg-card px-3 py-2 pr-[6.5rem] text-[0.95rem] text-text outline-none focus:border-accent"
+      />
+      <select
+        id="search-mode"
+        aria-label="Search mode"
+        class="absolute right-1 top-1/2 -translate-y-1/2 rounded-md border border-border bg-card px-2 py-1 text-[0.85rem] text-text outline-none focus:border-accent"
+      >
+        <option value="fields">Fields</option>
+        <option value="papers">Papers</option>
+      </select>
+    </div>
     <p class="min-h-[1.2rem] text-accent" id="hint"></p>
     <div id="fields" class="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-4"></div>
   </main>
@@ -20,20 +30,41 @@ import NavBar from "../components/NavBar.astro";
 
 <script>
   import { $user, $loading } from "../stores/auth";
-  import { getFields, getSubscriptions, subscribe, unsubscribe, type Field } from "../lib/api";
+  import {
+    getFields, getSubscriptions, getLikedIds, getSavedIds, searchPapers,
+    subscribe, unsubscribe, type Field, type FeedItem,
+  } from "../lib/api";
+  import { createCard } from "../lib/card";
+  import { promptLogin } from "../lib/loginPrompt";
+
+  const FIELDS_GRID_CLASS = "grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-4";
+  const PAPERS_LIST_CLASS = "flex flex-col gap-4";
 
   const grid = document.getElementById("fields")!;
   const hint = document.getElementById("hint")!;
   const search = document.getElementById("search") as HTMLInputElement;
+  const modeSelect = document.getElementById("search-mode") as HTMLSelectElement;
   let subscribed = new Set<string>();
+  let likedPaperIds = new Set<number>();
+  let savedPaperIds = new Set<number>();
   let signedInHint = "";
+
+  function mode(): "fields" | "papers" {
+    return modeSelect.value === "papers" ? "papers" : "fields";
+  }
 
   async function load() {
     subscribed = new Set();
+    likedPaperIds = new Set();
+    savedPaperIds = new Set();
     if ($user.get()) {
       try {
         const { subscriptions } = await getSubscriptions();
         subscribed = new Set(subscriptions.map((s) => s.slug));
+        const { paper_ids: liked } = await getLikedIds();
+        likedPaperIds = new Set(liked);
+        const { paper_ids: saved } = await getSavedIds();
+        savedPaperIds = new Set(saved);
       } catch (e) { console.error(e); }
     } else {
       signedInHint = "Sign in to subscribe to fields.";
@@ -44,6 +75,21 @@ import NavBar from "../components/NavBar.astro";
 
   async function runSearch() {
     const q = search.value.trim();
+    if (mode() === "papers") {
+      grid.className = PAPERS_LIST_CLASS;
+      if (!q) {
+        hint.textContent = signedInHint || "Type a paper title to search.";
+        renderPapers([]);
+        return;
+      }
+      const { items } = await searchPapers(q);
+      hint.textContent = items.length === 0
+        ? `No papers match "${q}".`
+        : signedInHint;
+      renderPapers(items);
+      return;
+    }
+    grid.className = FIELDS_GRID_CLASS;
     const { fields } = await getFields(q || undefined);
     hint.textContent = q && fields.length === 0
       ? `No fields match "${q}".`
@@ -56,6 +102,26 @@ import NavBar from "../components/NavBar.astro";
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(runSearch, 200);
   });
+
+  modeSelect.addEventListener("change", () => {
+    search.placeholder = mode() === "papers"
+      ? "Search papers by title…"
+      : "Search fields by keyword…";
+    runSearch();
+  });
+
+  function renderPapers(items: FeedItem[]) {
+    grid.innerHTML = "";
+    for (const item of items) {
+      grid.appendChild(createCard(item, {
+        subscribedSlugs: subscribed,
+        likedPaperIds,
+        savedPaperIds,
+        signedIn: () => !!$user.get(),
+        onNeedLogin: () => promptLogin("Sign in to subscribe, like, or save papers."),
+      }));
+    }
+  }
 
   /** Subscribed fields first (stable sort keeps each group's own order),
    * so a user's joined fields surface before browsing/searching the rest. */

@@ -21,6 +21,16 @@ def list_fields():
     return jsonify({"fields": fields})
 
 
+@bp.route("/api/papers", methods=["GET"])
+def search_papers():
+    """Search papers by title (common words like "a"/"the" are skipped), for
+    the paper-search mode of the fields-page search bar."""
+    q = request.args.get("q", "").strip()
+    with get_conn() as conn:
+        items = models.search_papers(conn, q) if q else []
+    return jsonify({"items": items})
+
+
 @bp.route("/api/fields/<slug>", methods=["GET"])
 @optional_auth
 def field_feed(slug):

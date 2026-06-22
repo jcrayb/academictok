@@ -69,11 +69,13 @@ def set_field_discover_offset(conn, field_id, offset):
 
 
 def fields_for_classifier(conn):
-    """Minimal field list (slug/name/description) for the LLM classifier."""
+    """Field list (slug/name/description/keywords) for the LLM classifier.
+    Keywords are included so the prompt can be narrowed to the most relevant
+    fields when the full list would be too large (see classifier._select_relevant)."""
     rows = conn.execute(
-        "SELECT slug, name, description FROM fields ORDER BY name"
+        "SELECT slug, name, description, keywords FROM fields ORDER BY name"
     ).fetchall()
-    return [dict(r) for r in rows]
+    return [_field_row(r) for r in rows]
 
 
 def create_field(conn, slug, name, description, query=None, is_seed=0, keywords=None):
@@ -182,6 +184,13 @@ def pending_full_summaries(conn, limit):
     return [dict(r) for r in rows]
 
 
+def count_pending_full_summaries(conn):
+    """How many discovery summaries are still awaiting the full-model upgrade."""
+    return conn.execute(
+        "SELECT COUNT(*) AS c FROM summaries WHERE needs_full_summary = 1"
+    ).fetchone()["c"]
+
+
 def update_short_summary(conn, paper_id, title, body, model):
     """Replace a paper's short summary and clear its upgrade flag."""
     conn.execute(
@@ -243,6 +252,16 @@ def papers_needing_enrichment(conn, limit):
         (limit,),
     ).fetchall()
     return [r["id"] for r in rows]
+
+
+def count_papers_needing_enrichment(conn):
+    """How many papers the scheduled enrichment pass still hasn't attempted."""
+    return conn.execute(
+        """SELECT COUNT(*) AS c FROM papers p
+           JOIN summaries s ON s.paper_id = p.id
+           WHERE s.enriched_at IS NULL
+             AND (s.long_body IS NULL OR p.pdf_url IS NOT NULL)"""
+    ).fetchone()["c"]
 
 
 def set_long_summary(conn, paper_id, long_body, source=None):
@@ -320,21 +339,31 @@ def clear_secondary_fields(conn, paper_id):
     )
 
 
-def papers_for_reclassify(conn, limit, after_id=0):
+def papers_for_reclassify(conn, limit, after_id=0, field_slugs=None):
     """Papers (oldest-first, paginated via ``after_id``) to run the full
     primary-field classifier on again, along with their current primary field
-    for logging. Used by the field-reclassification script."""
+    for logging. Used by the field-reclassification script.
+
+    ``field_slugs``, if given, restricts to papers whose current primary
+    field's slug is in that list.
+    """
+    params = [after_id]
+    field_filter = ""
+    if field_slugs:
+        placeholders = ", ".join("?" for _ in field_slugs)
+        field_filter = f" AND f.slug IN ({placeholders})"
+        params.extend(field_slugs)
     rows = conn.execute(
-        """SELECT p.id AS paper_id, p.title, s.body AS summary_body,
+        f"""SELECT p.id AS paper_id, p.title, s.body AS summary_body,
                   f.slug AS primary_slug, f.name AS primary_name
            FROM papers p
            JOIN summaries s ON s.paper_id = p.id
            LEFT JOIN paper_fields pf ON pf.paper_id = p.id AND pf.is_primary = 1
            LEFT JOIN fields f ON f.id = pf.field_id
-           WHERE p.id > ?
+           WHERE p.id > ?{field_filter}
            ORDER BY p.id
            LIMIT ?""",
-        (after_id, limit),
+        (*params, limit),
     ).fetchall()
     return [dict(r) for r in rows]
 
@@ -554,6 +583,30 @@ def get_paper_detail(conn, s2_paper_id):
     return base
 
 
+_SEARCH_STOPWORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "but", "by", "for", "from",
+    "has", "have", "if", "in", "into", "is", "it", "its", "of", "on", "or",
+    "that", "the", "their", "this", "to", "via", "was", "were", "with",
+}
+
+
+def search_papers(conn, query, limit=40):
+    """Papers whose title matches every significant word of ``query`` (substring,
+    case-insensitive, AND'd together like ``search_fields``). Common words (the,
+    a, an, ...) are skipped so they don't force a match. Returns feed items
+    (same shape as a field feed), labeled with each paper's primary field so
+    the client can link to it."""
+    words = [w for w in query.lower().split() if w.strip() and w not in _SEARCH_STOPWORDS]
+    if not words:
+        return []
+    where = " AND ".join("LOWER(p.title) LIKE ?" for _ in words)
+    params = [f"%{w}%" for w in words] + [limit]
+    rows = conn.execute(
+        f"{_FEED_SELECT} WHERE {where} ORDER BY p.title LIMIT ?", params
+    ).fetchall()
+    return [_feed_row(r) for r in rows]
+
+
 # ── Users / subscriptions ───────────────────────────────────────────────────
 
 def ensure_user(conn, uid):
@@ -630,3 +683,148 @@ def unsubscribe(conn, uid, slug):
         (uid, field["id"]),
     )
     return True
+
+
+# ── Collections ──────────────────────────────────────────────────────────────
+
+DEFAULT_COLLECTION_NAME = "Liked Papers"
+
+
+def get_or_create_default_collection(conn, uid):
+    """Every user has exactly one is_default=1 collection ("Liked Papers"),
+    created lazily on first use. Liking a paper is just saving it here."""
+    row = conn.execute(
+        "SELECT id FROM collections WHERE uid = ? AND is_default = 1", (uid,)
+    ).fetchone()
+    if row:
+        return row["id"]
+    cur = conn.execute(
+        "INSERT INTO collections (uid, name, is_default, created_at) VALUES (?, ?, 1, ?)",
+        (uid, DEFAULT_COLLECTION_NAME, now_iso()),
+    )
+    return cur.lastrowid
+
+
+def create_collection(conn, uid, name):
+    cur = conn.execute(
+        "INSERT INTO collections (uid, name, created_at) VALUES (?, ?, ?)",
+        (uid, name, now_iso()),
+    )
+    return cur.lastrowid
+
+
+def list_collections(conn, uid, limit=None):
+    """A user's collections, default ("Liked Papers") first then newest
+    first, with how many papers each holds. ``limit``, if given, caps the
+    result (e.g. for a navbar menu preview)."""
+    get_or_create_default_collection(conn, uid)
+    sql = """SELECT c.id, c.name, c.is_default, c.created_at,
+                    COUNT(cp.paper_id) AS paper_count
+              FROM collections c
+              LEFT JOIN collection_papers cp ON cp.collection_id = c.id
+              WHERE c.uid = ?
+              GROUP BY c.id
+              ORDER BY c.is_default DESC, c.created_at DESC"""
+    params = [uid]
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(limit)
+    rows = conn.execute(sql, params).fetchall()
+    return [{**dict(r), "is_default": bool(r["is_default"])} for r in rows]
+
+
+def get_collection(conn, uid, collection_id):
+    """A collection, only if it belongs to ``uid`` (ownership check)."""
+    row = conn.execute(
+        "SELECT id, uid, name, is_default, created_at FROM collections WHERE id = ? AND uid = ?",
+        (collection_id, uid),
+    ).fetchone()
+    if not row:
+        return None
+    return {**dict(row), "is_default": bool(row["is_default"])}
+
+
+def add_to_collection(conn, uid, collection_id, paper_id):
+    if not get_collection(conn, uid, collection_id):
+        return False
+    conn.execute(
+        """INSERT OR IGNORE INTO collection_papers (collection_id, paper_id, created_at)
+           VALUES (?, ?, ?)""",
+        (collection_id, paper_id, now_iso()),
+    )
+    return True
+
+
+def remove_from_collection(conn, uid, collection_id, paper_id):
+    if not get_collection(conn, uid, collection_id):
+        return False
+    conn.execute(
+        "DELETE FROM collection_papers WHERE collection_id = ? AND paper_id = ?",
+        (collection_id, paper_id),
+    )
+    return True
+
+
+def list_collection_papers(conn, uid, collection_id):
+    """A collection's saved papers (feed-item shape), or None if the
+    collection doesn't exist / isn't owned by ``uid``."""
+    if not get_collection(conn, uid, collection_id):
+        return None
+    rows = conn.execute(
+        f"""{_FEED_SELECT}
+           WHERE p.id IN (SELECT paper_id FROM collection_papers WHERE collection_id = ?)
+           ORDER BY p.id DESC""",
+        (collection_id,),
+    ).fetchall()
+    return [_feed_row(r) for r in rows]
+
+
+def collections_containing_paper(conn, uid, paper_id):
+    """Ids of this user's collections that already contain ``paper_id`` —
+    used to render the save popover's per-collection added/not-added state."""
+    rows = conn.execute(
+        """SELECT cp.collection_id FROM collection_papers cp
+           JOIN collections c ON c.id = cp.collection_id
+           WHERE c.uid = ? AND cp.paper_id = ?""",
+        (uid, paper_id),
+    ).fetchall()
+    return [r["collection_id"] for r in rows]
+
+
+def saved_paper_ids(conn, uid):
+    """Ids of every paper saved in ANY of this user's collections (including
+    the default "Liked Papers" one) — for the save/bookmark icon's filled state."""
+    rows = conn.execute(
+        """SELECT DISTINCT cp.paper_id FROM collection_papers cp
+           JOIN collections c ON c.id = cp.collection_id
+           WHERE c.uid = ?""",
+        (uid,),
+    ).fetchall()
+    return [r["paper_id"] for r in rows]
+
+
+# ── Likes ────────────────────────────────────────────────────────────────────
+# A "like" is just membership in the default collection — see
+# get_or_create_default_collection above.
+
+def like_paper(conn, uid, paper_id):
+    collection_id = get_or_create_default_collection(conn, uid)
+    add_to_collection(conn, uid, collection_id, paper_id)
+
+
+def unlike_paper(conn, uid, paper_id):
+    collection_id = get_or_create_default_collection(conn, uid)
+    remove_from_collection(conn, uid, collection_id, paper_id)
+
+
+def liked_paper_ids(conn, uid):
+    collection_id = get_or_create_default_collection(conn, uid)
+    rows = conn.execute(
+        "SELECT paper_id FROM collection_papers WHERE collection_id = ?", (collection_id,)
+    ).fetchall()
+    return [r["paper_id"] for r in rows]
+
+
+def list_liked_papers(conn, uid):
+    collection_id = get_or_create_default_collection(conn, uid)
+    return list_collection_papers(conn, uid, collection_id) or []

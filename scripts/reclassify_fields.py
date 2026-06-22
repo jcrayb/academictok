@@ -11,6 +11,7 @@ Examples:
   python scripts/reclassify_fields.py --all       # drain every paper
   python scripts/reclassify_fields.py --all --limit 100
   python scripts/reclassify_fields.py --all --sensitivity 0.2  # reluctant to add fields
+  python scripts/reclassify_fields.py --all --field machine-learning-planetary-science --field religion
 """
 import argparse
 import logging
@@ -39,6 +40,11 @@ def main():
                              "this run: 0 = never create a new field, 1 = create "
                              "one liberally. Default: config.NEW_FIELD_SENSITIVITY "
                              f"({config.NEW_FIELD_SENSITIVITY}).")
+    parser.add_argument("--field", action="append", dest="fields", default=None,
+                        help="Only reclassify papers whose current primary field "
+                             "has this slug. Repeatable to include multiple fields "
+                             "(e.g. --field machine-learning --field religion). "
+                             "Default: every paper.")
     args = parser.parse_args()
 
     if args.sensitivity is not None and not 0.0 <= args.sensitivity <= 1.0:
@@ -78,7 +84,7 @@ def main():
     while True:
         n, after_id = pipeline.reclassify_primary_fields(
             limit=args.limit, after_id=after_id, on_paper=on_paper,
-            sensitivity=args.sensitivity,
+            sensitivity=args.sensitivity, field_slugs=args.fields,
         )
         total += n
         print(f"Reclassified {n} papers (cursor at paper_id {after_id}).")

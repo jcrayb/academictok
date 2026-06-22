@@ -15,6 +15,29 @@ class LLMDisabledError(RuntimeError):
     """Raised when an LLM call is attempted with config.LLM_ENABLED off."""
 
 
+# Ollama occasionally hands back ``"done": false`` from a *non-streaming*
+# call — the model stopped (an early EOS) before actually finishing, most
+# often on longer generations under `format: json` + `think: false` on
+# reasoning-tuned models (e.g. qwen3.5). The response is then a truncated,
+# unparseable fragment. This is a flaky-generation issue, not a malformed
+# prompt, so a plain retry on the same request usually succeeds.
+_MAX_GENERATE_ATTEMPTS = 3
+
+
+def _post_generate_once(payload: dict) -> dict:
+    """A single /api/generate call. Raises RuntimeError if Ollama reports the
+    response as incomplete (``done: false``) — an early-EOS truncation — so
+    callers can retry the same request."""
+    resp = requests.post(
+        f"{config.OLLAMA_HOST}/api/generate", json=payload, timeout=300
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    if data.get("done", True) is False:
+        raise RuntimeError("Ollama returned an incomplete (done=false) response")
+    return data
+
+
 def generate_text(prompt, system="", images=None, model=None, temperature=0.2):
     """Plain-text completion, optionally multimodal.
 
@@ -35,11 +58,17 @@ def generate_text(prompt, system="", images=None, model=None, temperature=0.2):
     if images:
         payload["images"] = [base64.b64encode(b).decode("ascii") for b in images]
 
-    resp = requests.post(
-        f"{config.OLLAMA_HOST}/api/generate", json=payload, timeout=300
-    )
-    resp.raise_for_status()
-    return resp.json().get("response", "").strip()
+    last_error = None
+    for attempt in range(1, _MAX_GENERATE_ATTEMPTS + 1):
+        try:
+            data = _post_generate_once(payload)
+        except (requests.RequestException, RuntimeError) as e:
+            last_error = e
+            logger.warning("Ollama generate failed (attempt %d/%d): %s",
+                           attempt, _MAX_GENERATE_ATTEMPTS, e)
+            continue
+        return data.get("response", "").strip()
+    raise last_error
 
 
 def generate_json(prompt: str, system: str = "", temperature: float = 0.2,
@@ -65,12 +94,23 @@ def generate_json(prompt: str, system: str = "", temperature: float = 0.2,
     if system:
         payload["system"] = system
 
-    resp = requests.post(
-        f"{config.OLLAMA_HOST}/api/generate", json=payload, timeout=300
-    )
-    resp.raise_for_status()
-    text = resp.json().get("response", "").strip()
-    return _parse_json(text)
+    last_error = None
+    for attempt in range(1, _MAX_GENERATE_ATTEMPTS + 1):
+        try:
+            data = _post_generate_once(payload)
+        except (requests.RequestException, RuntimeError) as e:
+            last_error = e
+            logger.warning("Ollama generate failed (attempt %d/%d): %s",
+                           attempt, _MAX_GENERATE_ATTEMPTS, e)
+            continue
+        text = data.get("response", "").strip()
+        try:
+            return _parse_json(text)
+        except ValueError as e:
+            last_error = e
+            logger.warning("Unparseable JSON from LLM (attempt %d/%d), retrying",
+                           attempt, _MAX_GENERATE_ATTEMPTS)
+    raise last_error
 
 
 def _parse_json(text: str) -> dict:

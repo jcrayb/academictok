@@ -7,7 +7,7 @@ export const API_BASE = BASE;
 
 async function apiFetch(path: string, options: RequestInit = {}) {
   const res = await fetch(`${BASE}${path}`, options);
-  if (!res.ok && ![400, 401, 403].includes(res.status)) {
+  if (!res.ok && ![400, 401, 403, 404].includes(res.status)) {
     throw new Error(`API ${res.status}: ${path}`);
   }
   return res.json();
@@ -141,6 +141,11 @@ export async function getFields(q?: string): Promise<{ fields: Field[] }> {
   return apiFetch(`/api/fields${qs}`);
 }
 
+/** Search papers by title (common words like "a"/"the" are skipped server-side). */
+export async function searchPapers(q: string): Promise<{ items: FeedItem[] }> {
+  return apiFetch(`/api/papers?q=${encodeURIComponent(q)}`);
+}
+
 // ── Subscriptions ─────────────────────────────────────────────────────────────
 
 export async function getSubscriptions(): Promise<{ subscriptions: Field[] }> {
@@ -160,6 +165,93 @@ export async function subscribe(slug: string) {
 export async function unsubscribe(slug: string) {
   const { headers, uid } = await authParams();
   return apiFetch(`/api/subscriptions/${slug}?uid=${uid}`, {
+    method: "DELETE",
+    headers,
+  });
+}
+
+// ── Likes ───────────────────────────────────────────────────────────────────
+
+export async function getLikedIds(): Promise<{ paper_ids: number[] }> {
+  const { headers, uid } = await authParams();
+  return apiFetch(`/api/likes/ids?uid=${uid}`, { headers });
+}
+
+export async function getLikedPapers(): Promise<{ items: FeedItem[] }> {
+  const { headers, uid } = await authParams();
+  return apiFetch(`/api/likes?uid=${uid}`, { headers });
+}
+
+export async function likePaper(paperId: number) {
+  const { headers, uid, token } = await authParams();
+  return apiFetch("/api/likes", {
+    method: "POST",
+    headers: { ...headers, "Content-Type": "application/json" },
+    body: JSON.stringify({ idToken: token, uid, paper_id: paperId }),
+  });
+}
+
+export async function unlikePaper(paperId: number) {
+  const { headers, uid } = await authParams();
+  return apiFetch(`/api/likes/${paperId}?uid=${uid}`, { method: "DELETE", headers });
+}
+
+// ── Collections ─────────────────────────────────────────────────────────────
+
+export interface Collection {
+  id: number;
+  name: string;
+  is_default: boolean;
+  created_at: string;
+  paper_count: number;
+}
+
+export async function getCollections(limit?: number): Promise<{ collections: Collection[] }> {
+  const { headers, uid } = await authParams();
+  const qs = limit != null ? `&limit=${limit}` : "";
+  return apiFetch(`/api/collections?uid=${uid}${qs}`, { headers });
+}
+
+/** Ids of every paper saved in any collection — for a save/bookmark icon's
+ *  filled state without a request per card. */
+export async function getSavedIds(): Promise<{ paper_ids: number[] }> {
+  const { headers, uid } = await authParams();
+  return apiFetch(`/api/collections/saved-ids?uid=${uid}`, { headers });
+}
+
+/** Which of the user's collections already contain this paper — powers the
+ *  save popover's per-collection added/not-added state. */
+export async function getCollectionsForPaper(paperId: number): Promise<{ collection_ids: number[] }> {
+  const { headers, uid } = await authParams();
+  return apiFetch(`/api/collections/paper/${paperId}?uid=${uid}`, { headers });
+}
+
+export async function createCollection(name: string): Promise<{ collection_id: number; collections: Collection[] }> {
+  const { headers, uid, token } = await authParams();
+  return apiFetch("/api/collections", {
+    method: "POST",
+    headers: { ...headers, "Content-Type": "application/json" },
+    body: JSON.stringify({ idToken: token, uid, name }),
+  });
+}
+
+export async function getCollection(collectionId: number): Promise<{ collection: Collection; items: FeedItem[] }> {
+  const { headers, uid } = await authParams();
+  return apiFetch(`/api/collections/${collectionId}?uid=${uid}`, { headers });
+}
+
+export async function addToCollection(collectionId: number, paperId: number) {
+  const { headers, uid, token } = await authParams();
+  return apiFetch(`/api/collections/${collectionId}/papers`, {
+    method: "POST",
+    headers: { ...headers, "Content-Type": "application/json" },
+    body: JSON.stringify({ idToken: token, uid, paper_id: paperId }),
+  });
+}
+
+export async function removeFromCollection(collectionId: number, paperId: number) {
+  const { headers, uid } = await authParams();
+  return apiFetch(`/api/collections/${collectionId}/papers/${paperId}?uid=${uid}`, {
     method: "DELETE",
     headers,
   });

@@ -1,11 +1,48 @@
 """Classify a paper into an existing field or propose a new one, via the LLM."""
 import logging
+import re
 
 import config
 from ingest.ollama_client import generate_json
 from seeds import slugify
 
 logger = logging.getLogger(__name__)
+
+_WORD_RE = re.compile(r"[a-z0-9]+")
+# Common words that overlap with nearly every field/paper and so add noise
+# rather than signal when scoring relevance.
+_STOPWORDS = {
+    "a", "an", "and", "are", "as", "at", "based", "by", "for", "from", "in",
+    "into", "is", "it", "its", "new", "of", "on", "or", "study", "that",
+    "the", "their", "this", "to", "using", "via", "with",
+}
+
+
+def _tokens(text):
+    return {w for w in _WORD_RE.findall((text or "").lower()) if w not in _STOPWORDS}
+
+
+def _select_relevant_fields(paper: dict, summary: dict, fields: list,
+                             max_fields: int) -> list:
+    """Rank fields by word/keyword overlap with the paper's title+summary, and
+    keep only the most relevant ``max_fields``. Sending all fields once the
+    list grows into the hundreds can blow the prompt past OLLAMA_NUM_CTX,
+    silently truncating it (the model may never even see the paper's title or
+    summary) — this keeps the classifier prompt bounded as the field list grows.
+    """
+    if len(fields) <= max_fields:
+        return fields
+    paper_words = _tokens(paper.get("title", "")) | _tokens(summary.get("body", ""))
+    scored = []
+    for f in fields:
+        kw_words = {kw.lower() for kw in (f.get("keywords") or [])}
+        name_desc_words = _tokens(f.get("name", "")) | _tokens(f.get("description", ""))
+        # Curated keywords are the strongest relevance signal, so they count double.
+        score = (2 * len(paper_words & kw_words)
+                 + len(paper_words & (name_desc_words - kw_words)))
+        scored.append((score, f))
+    scored.sort(key=lambda sf: sf[0], reverse=True)
+    return [f for _, f in scored[:max_fields]]
 
 SYSTEM = (
     "You assign academic papers to research fields (like subreddits). Secondary "
@@ -122,8 +159,10 @@ def classify(paper: dict, summary: dict, fields: list, model: str | None = None,
     """
     if sensitivity is None:
         sensitivity = config.NEW_FIELD_SENSITIVITY
+    shown_fields = _select_relevant_fields(paper, summary, fields,
+                                            config.CLASSIFIER_MAX_FIELDS)
     field_list = "\n".join(
-        f"- {f['slug']} — {f['name']}: {f.get('description') or ''}" for f in fields
+        f"- {f['slug']} — {f['name']}: {f.get('description') or ''}" for f in shown_fields
     )
     prompt = PROMPT.format(
         title=paper["title"],
@@ -133,7 +172,7 @@ def classify(paper: dict, summary: dict, fields: list, model: str | None = None,
     )
     result = generate_json(prompt, system=SYSTEM, temperature=0.1, model=model)
 
-    existing_slugs = {f["slug"] for f in fields}
+    existing_slugs = {f["slug"] for f in shown_fields}
 
     slug = (result.get("field_slug") or "").strip()
     if slug and slug in existing_slugs:
@@ -244,8 +283,10 @@ def classify_secondary(paper: dict, summary: dict, fields: list, primary_slug: s
     others = [f for f in fields if f["slug"] != primary_slug]
     if not others:
         return []
+    shown_fields = _select_relevant_fields(paper, summary, others,
+                                            config.CLASSIFIER_MAX_FIELDS)
     field_list = "\n".join(
-        f"- {f['slug']} — {f['name']}: {f.get('description') or ''}" for f in others
+        f"- {f['slug']} — {f['name']}: {f.get('description') or ''}" for f in shown_fields
     )
     prompt = SECONDARY_PROMPT.format(
         primary_name=primary_name,
@@ -254,5 +295,5 @@ def classify_secondary(paper: dict, summary: dict, fields: list, primary_slug: s
         field_list=field_list,
     )
     result = generate_json(prompt, system=SECONDARY_SYSTEM, temperature=0.1)
-    existing_slugs = {f["slug"] for f in others}
+    existing_slugs = {f["slug"] for f in shown_fields}
     return _secondary_slugs(result, existing_slugs, primary_slug)
