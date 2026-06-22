@@ -1,5 +1,11 @@
 services:
-  backend:
+  # Named academictok-backend/-frontend, not backend/frontend, because this
+  # service runs on the same shared `webhost` network as other apps (e.g.
+  # the options app) — Compose registers the service name as the DNS hostname
+  # on that network, and a generic "backend"/"frontend" would collide with
+  # theirs (NGINX's resolution of the name would then be ambiguous as to
+  # which stack's container it actually hits).
+  academictok-backend:
     build: .
     image: academictok-backend
     restart: unless-stopped
@@ -47,7 +53,7 @@ services:
       timeout: 5s
       retries: 3
 
-  frontend:
+  academictok-frontend:
     build:
       context: ./frontend
     image: academictok-frontend
@@ -58,7 +64,7 @@ services:
       HOST: 0.0.0.0
       PORT: "4321"
     depends_on:
-      backend:
+      academictok-backend:
         condition: service_healthy
     networks: [webhost]
     security_opt: ["no-new-privileges:true"]
