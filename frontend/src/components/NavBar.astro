@@ -172,7 +172,11 @@
     menu.id = "user-menu";
     menu.className =
       "absolute right-0 top-full z-30 mt-2 w-60 rounded-lg border border-accent bg-card p-2 shadow-lg";
-    menu.innerHTML = `<p class="m-0 px-1 py-1 text-[0.78rem] text-muted">Loading collections…</p>`;
+    const user = $user.get();
+    const nameHtml = user
+      ? `<p class="m-0 mb-2 truncate px-1 text-[0.85rem] font-semibold text-text">${escapeHtml(user.displayName || user.email || "Signed in")}</p>`
+      : "";
+    menu.innerHTML = `${nameHtml}<p class="m-0 px-1 py-1 text-[0.78rem] text-muted">Loading collections…</p>`;
     anchor.appendChild(menu);
 
     const onDocClick = (e: MouseEvent) => {
@@ -203,6 +207,7 @@
     }
 
     menu.innerHTML = `
+      ${nameHtml}
       <p class="m-0 mb-1 px-2 text-[0.72rem] uppercase tracking-wide text-muted">Collections</p>
       ${collectionsHtml}
       <a href="/collections" class="mt-1 block rounded-md px-2 py-[0.35rem] text-[0.85rem] text-accent no-underline hover:bg-bg">Explore all collections →</a>
@@ -228,14 +233,27 @@
     slot.innerHTML = "";
     closeUserMenu();
     if (user) {
-      const nameBtn = document.createElement("button");
-      nameBtn.className = "!border-0 !bg-transparent text-[0.9rem] text-text";
-      nameBtn.textContent = user.displayName || user.email || "signed in";
-      nameBtn.onclick = (e) => {
+      const avatarBtn = document.createElement("button");
+      avatarBtn.className = "!border-0 !bg-transparent !p-0 flex items-center";
+      avatarBtn.setAttribute("aria-label", "Account menu");
+      if (user.photoURL) {
+        const img = document.createElement("img");
+        img.src = user.photoURL;
+        img.alt = "";
+        img.className = "h-8 w-8 rounded-full object-cover";
+        avatarBtn.append(img);
+      } else {
+        const initial = document.createElement("span");
+        initial.className =
+          "flex h-8 w-8 items-center justify-center rounded-full bg-accent text-[0.9rem] font-semibold text-white";
+        initial.textContent = (user.displayName || user.email || "?").charAt(0).toUpperCase();
+        avatarBtn.append(initial);
+      }
+      avatarBtn.onclick = (e) => {
         e.stopPropagation();
         openUserMenu(slot);
       };
-      slot.append(nameBtn);
+      slot.append(avatarBtn);
     } else {
       const inb = document.createElement("button");
       inb.className = "primary";
@@ -269,7 +287,7 @@
     searchResultsList.innerHTML = fields.length
       ? fields.map((f) => `
           <a href="${fieldHref(f.slug)}" class="block border-b border-border p-3 no-underline last:border-b-0 hover:bg-bg">
-            <div class="text-[0.95rem] font-semibold text-text">${escapeHtml(f.name)}</div>
+            <div class="text-[0.95rem] font-semibold text-text">${escapeHtml(f.name.split('-').map(word => word[0].toUpperCase() + word.slice(1)) .join(' '))}</div>
             <div class="mt-[0.15rem] text-[0.82rem] text-muted">${escapeHtml(f.description ?? "")}</div>
           </a>`).join("")
       : '<p class="p-3 text-[0.85rem] text-muted">No fields match.</p>';
