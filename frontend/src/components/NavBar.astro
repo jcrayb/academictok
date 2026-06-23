@@ -189,21 +189,25 @@
 
     let collectionsHtml = "";
     let isAdmin = false;
-    try {
-      const [{ collections }, admin] = await Promise.all([
-        getCollections(MAX_COLLECTIONS_IN_MENU),
-        adminCheck(),
-      ]);
-      isAdmin = admin.admin;
-      collectionsHtml = collections.length
-        ? collections.map((c) => `
-            <a href="/collections/${c.id}" class="block rounded-md px-2 py-[0.35rem] text-[0.85rem] text-text no-underline hover:bg-bg">
-              ${c.is_default ? "❤️ " : ""}${c.name} <span class="text-muted">(${c.paper_count})</span>
-            </a>`).join("")
-        : `<p class="m-0 mb-1 px-2 text-[0.78rem] text-muted">No collections yet.</p>`;
-    } catch (e) {
-      console.error(e);
-      collectionsHtml = `<p class="m-0 mb-1 px-2 text-[0.78rem] text-muted">Failed to load collections.</p>`;
+    if (!user) {
+      collectionsHtml = `<p class="m-0 mb-1 px-2 text-[0.78rem] text-muted">Sign in to save collections.</p>`;
+    } else {
+      try {
+        const [{ collections }, admin] = await Promise.all([
+          getCollections(MAX_COLLECTIONS_IN_MENU),
+          adminCheck(),
+        ]);
+        isAdmin = admin.admin;
+        collectionsHtml = collections.length
+          ? collections.map((c) => `
+              <a href="/collections/${c.id}" class="block rounded-md px-2 py-[0.35rem] text-[0.85rem] text-text no-underline hover:bg-bg">
+                ${c.is_default ? "❤️ " : ""}${c.name} <span class="text-muted">(${c.paper_count})</span>
+              </a>`).join("")
+          : `<p class="m-0 mb-1 px-2 text-[0.78rem] text-muted">No collections yet.</p>`;
+      } catch (e) {
+        console.error(e);
+        collectionsHtml = `<p class="m-0 mb-1 px-2 text-[0.78rem] text-muted">Failed to load collections.</p>`;
+      }
     }
 
     menu.innerHTML = `
@@ -214,16 +218,21 @@
       <div class="mt-2 border-t border-border pt-2">
         ${isAdmin ? '<a href="/admin" class="block rounded-md px-2 py-[0.35rem] text-[0.85rem] text-text no-underline hover:bg-bg">Admin</a>' : ""}
         <button id="user-menu-theme" class="block w-full rounded-md px-2 py-[0.35rem] text-left text-[0.85rem] text-text hover:bg-bg">🎨 Themes</button>
-        <button id="user-menu-signout" class="block w-full rounded-md px-2 py-[0.35rem] text-left text-[0.85rem] text-text hover:bg-bg">Sign out</button>
+        <button id="user-menu-auth" class="block w-full rounded-md px-2 py-[0.35rem] text-left text-[0.85rem] text-text hover:bg-bg">${user ? "Sign out" : "Sign in with Google"}</button>
       </div>`;
 
     (menu.querySelector("#user-menu-theme") as HTMLButtonElement).onclick = () => {
       closeUserMenu();
       openSettings();
     };
-    (menu.querySelector("#user-menu-signout") as HTMLButtonElement).onclick = () => {
+    (menu.querySelector("#user-menu-auth") as HTMLButtonElement).onclick = async () => {
       closeUserMenu();
-      signOut();
+      if (user) {
+        signOut();
+      } else {
+        await signInWithGoogle();
+        try { await verifyUser(); } catch (e) { console.error(e); }
+      }
     };
   }
 
@@ -232,38 +241,32 @@
     const user = $user.get();
     slot.innerHTML = "";
     closeUserMenu();
-    if (user) {
-      const avatarBtn = document.createElement("button");
-      avatarBtn.className = "!border-0 !bg-transparent !p-0 flex items-center";
-      avatarBtn.setAttribute("aria-label", "Account menu");
-      if (user.photoURL) {
-        const img = document.createElement("img");
-        img.src = user.photoURL;
-        img.alt = "";
-        img.className = "h-8 w-8 rounded-full object-cover";
-        avatarBtn.append(img);
-      } else {
-        const initial = document.createElement("span");
-        initial.className =
-          "flex h-8 w-8 items-center justify-center rounded-full bg-accent text-[0.9rem] font-semibold text-white";
-        initial.textContent = (user.displayName || user.email || "?").charAt(0).toUpperCase();
-        avatarBtn.append(initial);
-      }
-      avatarBtn.onclick = (e) => {
-        e.stopPropagation();
-        openUserMenu(slot);
-      };
-      slot.append(avatarBtn);
+
+    const avatarBtn = document.createElement("button");
+    avatarBtn.className = "!border-0 !bg-transparent !p-0 flex items-center";
+    avatarBtn.setAttribute("aria-label", "Account menu");
+    if (user?.photoURL) {
+      const img = document.createElement("img");
+      img.src = user.photoURL;
+      img.alt = "";
+      img.className = "h-8 w-8 rounded-full object-cover";
+      avatarBtn.append(img);
+    } else if (user) {
+      const initial = document.createElement("span");
+      initial.className =
+        "flex h-8 w-8 items-center justify-center rounded-full bg-accent text-[0.9rem] font-semibold text-white";
+      initial.textContent = (user.displayName || user.email || "?").charAt(0).toUpperCase();
+      avatarBtn.append(initial);
     } else {
-      const inb = document.createElement("button");
-      inb.className = "primary";
-      inb.textContent = "Sign in with Google";
-      inb.onclick = async () => {
-        await signInWithGoogle();
-        try { await verifyUser(); } catch (e) { console.error(e); }
-      };
-      slot.append(inb);
+      const blank = document.createElement("span");
+      blank.className = "h-8 w-8 rounded-full border border-border bg-card";
+      avatarBtn.append(blank);
     }
+    avatarBtn.onclick = (e) => {
+      e.stopPropagation();
+      openUserMenu(slot);
+    };
+    slot.append(avatarBtn);
   }
 
   $loading.subscribe(render);

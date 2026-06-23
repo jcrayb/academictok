@@ -56,8 +56,8 @@ export const ACCENTS: AccentInfo[] = [
 
 const BG_KEY = "theme-bg";
 const ACCENT_KEY = "theme-accent";
-const DEFAULT_BG: BackgroundId = "dark";
-const DEFAULT_ACCENT: AccentId = "orange";
+const DEFAULT_BG: BackgroundId = "light-soft";
+const DEFAULT_ACCENT: AccentId = "blue";
 
 function migrateOldTheme(): BackgroundId | null {
   const old = localStorage.getItem("theme");

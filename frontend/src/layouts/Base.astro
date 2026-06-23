@@ -53,10 +53,10 @@ const { title = "AcademicTok", useMath = false } = Astro.props;
         var bgId = localStorage.getItem("theme-bg");
         if (!backgrounds[bgId]) {
           var old = localStorage.getItem("theme");
-          bgId = (old && oldMap[old]) || "dark";
+          bgId = (old && oldMap[old]) || "light-soft";
         }
         var accentId = localStorage.getItem("theme-accent");
-        if (!accents[accentId]) accentId = "orange";
+        if (!accents[accentId]) accentId = "blue";
 
         var bg = backgrounds[bgId];
         var accent = accents[accentId];
