@@ -2,7 +2,7 @@
 import Base from "../../../layouts/Base.astro";
 import NavBar from "../../../components/NavBar.astro";
 
-// Reddit-style post page: /r/<field>/<post-id>. Rendered on demand (SSR); the
+// Post page: /f/<field>/<post-id>. Rendered on demand (SSR); the
 // post id (Semantic Scholar paperId) comes from the path, the detailed summary
 // is fetched client-side.
 const { field } = Astro.params;
@@ -11,7 +11,7 @@ const { field } = Astro.params;
 <Base title="Paper · AcademicTok" useMath={true}>
   <NavBar />
   <main class="mx-auto max-w-[720px] px-4 pt-4 pb-16">
-    <a href={`/r/${field}`} class="mb-4 inline-block text-[0.9rem] text-muted no-underline">← r/{field}</a>
+    <a href={`/f/${field}`} class="mb-4 inline-block text-[0.9rem] text-muted no-underline">← f/{field}</a>
     <article id="paper">
       <p class="py-10 text-center text-muted">
         <span class="mr-[0.4rem] inline-block h-[1em] w-[1em] animate-spin rounded-full border-2 border-border border-t-accent align-[-2px]"></span>Loading detailed summary…
@@ -50,7 +50,7 @@ const { field } = Astro.params;
       saved.forEach((id) => savedPaperIds.add(id));
     } catch (e) { console.error(e); }
   }
-  // Path: /r/<field>/<id>
+  // Path: /f/<field>/<id>
   const parts = location.pathname.split("/").filter(Boolean);
   const id = decodeURIComponent(parts[2] || "");
 
@@ -101,7 +101,7 @@ const { field } = Astro.params;
   }
 
   function fieldLink(f: { slug: string }) {
-    return `<a href="${fieldHref(f.slug)}" class="text-[0.85rem] font-semibold text-accent no-underline">r/${f.slug}</a>`;
+    return `<a href="${fieldHref(f.slug)}" class="text-[0.85rem] font-semibold text-accent no-underline">f/${f.slug}</a>`;
   }
 
   function render(p: PaperDetail) {

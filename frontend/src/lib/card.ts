@@ -4,14 +4,14 @@ import {
 } from "./api";
 import { observeSeen } from "./seen";
 
-/** Reddit-style URL for a field: /r/<field>. */
+/** URL for a field: /f/<field>. */
 export function fieldHref(slug: string) {
-  return `/r/${encodeURIComponent(slug)}`;
+  return `/f/${encodeURIComponent(slug)}`;
 }
 
-/** Reddit-style URL for a post: /r/<field>/<post-id>. */
+/** URL for a post: /f/<field>/<post-id>. */
 export function paperHref(fieldSlug: string, s2PaperId: string) {
-  return `/r/${encodeURIComponent(fieldSlug)}/${encodeURIComponent(s2PaperId)}`;
+  return `/f/${encodeURIComponent(fieldSlug)}/${encodeURIComponent(s2PaperId)}`;
 }
 
 export interface CardCtx {
@@ -95,7 +95,7 @@ export function createCard(item: FeedItem, ctx: CardCtx): HTMLElement {
   el.innerHTML = `
     <div class="flex items-center justify-between text-[0.8rem] text-muted">
       <span class="flex items-center gap-2">
-        <span class="font-semibold text-accent"><a href="/r/${item.field.slug}" class="hover:underline">r/${item.field.slug}</a></span>
+        <span class="font-semibold text-accent"><a href="/f/${item.field.slug}" class="hover:underline">f/${item.field.slug}</a></span>
         ${joinPill}
       </span>
       <span>${item.citation_count} citations · ${item.year ?? ""}</span>
@@ -208,10 +208,17 @@ async function toggleSavePopover(
   closeSavePopover();
   if (wasOpenForThisButton) return;
 
+  // Anchor the popover to whichever side keeps it on-screen: if the button sits
+  // on the right half of the viewport, anchor its right edge to the button;
+  // otherwise anchor the left edge. Avoids the menu overflowing on narrow widths.
+  const btnRect = btn.getBoundingClientRect();
+  const anchorSide =
+    btnRect.left + btnRect.width / 2 > window.innerWidth / 2 ? "right-0" : "left-0";
+
   const popover = document.createElement("div");
   popover.dataset.forPaper = String(paperId);
   popover.className =
-    "like-save-controls absolute right-0 top-full z-30 mt-1 w-56 rounded-lg border border-accent bg-card p-2 shadow-lg";
+    `like-save-controls absolute ${anchorSide} top-full z-30 mt-1 w-56 rounded-lg border border-accent bg-card p-2 shadow-lg`;
   popover.innerHTML = `<p class="m-0 mb-1 px-1 text-[0.78rem] text-muted">Loading collections…</p>`;
   wrap.appendChild(popover);
   openSavePopover = popover;

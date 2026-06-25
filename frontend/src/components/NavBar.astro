@@ -1,10 +1,10 @@
 ---
 // Auth-aware navigation bar. Hydrated by the inline script below.
 ---
-<nav class="sticky top-0 z-10 flex items-center gap-3 border-b border-border bg-bg px-[1.2rem] py-[0.8rem] justify-between">
-  <a href="/" class="shrink-0 text-[1.2rem] font-extrabold text-text no-underline">academic<span class="text-accent">tok</span></a>
+<nav class="sticky top-0 z-10 grid grid-cols-[1fr_minmax(0,608px)_1fr] items-center gap-3 border-b border-border bg-bg px-[1.2rem] py-[0.8rem]">
+  <a href="/" class="shrink-0 justify-self-start text-[1.2rem] font-extrabold text-text no-underline">academic<span class="text-accent">tok</span></a>
 
-  <div class="relative mx-1 min-w-0 max-w-[420px] flex-1">
+  <div class="relative w-full min-w-0">
     <input
       id="nav-search"
       type="search"
@@ -33,7 +33,7 @@
     </div>
   </div>
 
-  <div class="flex shrink-0 items-center gap-4">
+  <div class="flex shrink-0 items-center gap-4 justify-self-end">
     <span id="nav-auth" class="relative inline-flex items-center gap-[0.6rem]"></span>
   </div>
 </nav>
@@ -302,7 +302,7 @@
       ? items.map((it) => `
           <a href="${paperHref(it.field.slug, it.s2_paper_id)}" class="block border-b border-border p-3 no-underline last:border-b-0 hover:bg-bg">
             <div class="text-[0.95rem] font-semibold text-text">${escapeHtml(it.paper_title)}</div>
-            <div class="mt-[0.15rem] text-[0.82rem] text-muted">r/${escapeHtml(it.field.slug)} · ${it.year ?? ""}</div>
+            <div class="mt-[0.15rem] text-[0.82rem] text-muted">f/${escapeHtml(it.field.slug)} · ${it.year ?? ""}</div>
           </a>`).join("")
       : '<p class="p-3 text-[0.85rem] text-muted">No papers match.</p>';
     searchResults.hidden = false;

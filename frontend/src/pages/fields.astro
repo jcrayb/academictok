@@ -137,7 +137,7 @@ import NavBar from "../components/NavBar.astro";
     grid.innerHTML = "";
     for (const f of bubbleSubscribed(fields)) {
       const on = subscribed.has(f.slug);
-      const href = `/r/${encodeURIComponent(f.slug)}`;
+      const href = `/f/${encodeURIComponent(f.slug)}`;
       const el = document.createElement("article");
       
       el.className =

@@ -2,20 +2,20 @@
 import Base from "../../../layouts/Base.astro";
 import NavBar from "../../../components/NavBar.astro";
 
-// Reddit-style field feed: /r/<field>. Rendered on demand (SSR); the field
+// Field feed: /f/<field>. Rendered on demand (SSR); the field
 // slug comes from the path and the feed is fetched client-side.
 const { field } = Astro.params;
 ---
 
-<Base title={`r/${field} · AcademicTok`}>
+<Base title={`f/${field} · AcademicTok`}>
   <NavBar />
   <main class="mx-auto max-w-[640px] p-4">
     <a href="/fields" class="mb-2 inline-block text-[0.9rem] text-muted no-underline">← All fields</a>
     <div class="flex items-center gap-3">
-      <h1 id="field-name" class="m-0">{`r/${field}`}</h1>
+      <h1 id="field-name" class="m-0">{`f/${field}`}</h1>
       <button id="join-btn" class="rounded-full px-[0.9rem] py-[0.25rem] text-[0.8rem] font-semibold primary">Join</button>
     </div>
-    <p id="field-hint" class="min-h-[1.2rem] text-[0.9rem] text-accent font-semibold">{`r/${field}`}</p>
+    <p id="field-hint" class="min-h-[1.2rem] text-[0.9rem] text-accent font-semibold">{`f/${field}`}</p>
     <div class="mb-3 flex items-center gap-4 text-[0.85rem]">
       <label class="flex items-center gap-[0.4rem] text-muted">Sort
         <select id="sort" class="rounded-lg border border-border bg-bg p-1 text-text">
@@ -54,7 +54,7 @@ const { field } = Astro.params;
   const joinBtn = document.getElementById("join-btn") as HTMLButtonElement;
   const PAGE_SIZE = 20;
 
-  // Path: /r/<field>
+  // Path: /f/<field>
   const parts = location.pathname.split("/").filter(Boolean);
   const slug = decodeURIComponent(parts[1] || "");
 
