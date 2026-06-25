@@ -14,7 +14,10 @@ import NavBar from "../../components/NavBar.astro";
     </div>
 
     <div id="signed-in" hidden>
-      <h1 id="collection-name">Collection</h1>
+      <div class="flex items-center justify-between gap-3">
+        <h1 id="collection-name">Collection</h1>
+        <button id="delete-collection" class="shrink-0 text-[0.85rem] text-muted hover:text-accent !border-0 !bg-transparent" hidden>Delete</button>
+      </div>
       <div id="items" class="flex flex-col gap-4"></div>
       <p id="empty" class="text-muted" hidden>No papers saved here yet.</p>
       <p id="not-found" class="text-muted" hidden>This collection doesn't exist (or isn't yours).</p>
@@ -24,7 +27,7 @@ import NavBar from "../../components/NavBar.astro";
 
 <script>
   import { $user, $loading } from "../../stores/auth";
-  import { getCollection, getLikedIds, getSavedIds } from "../../lib/api";
+  import { getCollection, getLikedIds, getSavedIds, getSubscriptions, deleteCollection } from "../../lib/api";
   import { createCard, type CardCtx } from "../../lib/card";
   import { promptLogin } from "../../lib/loginPrompt";
 
@@ -32,6 +35,7 @@ import NavBar from "../../components/NavBar.astro";
   const signedInEl = document.getElementById("signed-in")!;
   const signedOutSignin = document.getElementById("signed-out-signin") as HTMLButtonElement;
   const nameEl = document.getElementById("collection-name")!;
+  const deleteBtn = document.getElementById("delete-collection") as HTMLButtonElement;
   const itemsEl = document.getElementById("items")!;
   const emptyEl = document.getElementById("empty")!;
   const notFoundEl = document.getElementById("not-found")!;
@@ -54,17 +58,20 @@ import NavBar from "../../components/NavBar.astro";
       onNeedLogin: () => promptLogin("Sign in to like or save papers."),
     };
     try {
-      const [{ paper_ids: liked }, { paper_ids: saved }] = await Promise.all([
-        getLikedIds(), getSavedIds(),
+      const [{ paper_ids: liked }, { paper_ids: saved }, { subscriptions }] = await Promise.all([
+        getLikedIds(), getSavedIds(), getSubscriptions(),
       ]);
       liked.forEach((id) => cardCtx.likedPaperIds!.add(id));
       saved.forEach((id) => cardCtx.savedPaperIds!.add(id));
+      subscriptions.forEach((s) => cardCtx.subscribedSlugs.add(s.slug));
     } catch (e) { console.error(e); }
 
     try {
       const { collection, items } = await getCollection(collectionId);
       if (!collection) { notFoundEl.hidden = false; return; }
       nameEl.textContent = collection.name;
+      // The default "Liked Papers" collection can't be deleted.
+      deleteBtn.hidden = collection.is_default;
       itemsEl.innerHTML = "";
       emptyEl.hidden = items.length > 0;
       for (const item of items) itemsEl.appendChild(createCard(item, cardCtx));
@@ -73,6 +80,19 @@ import NavBar from "../../components/NavBar.astro";
       notFoundEl.hidden = false;
     }
   }
+
+  deleteBtn.onclick = async () => {
+    const name = nameEl.textContent || "this collection";
+    if (!confirm(`Delete the collection "${name}"? This can't be undone.`)) return;
+    deleteBtn.disabled = true;
+    try {
+      await deleteCollection(collectionId);
+      location.href = "/collections";
+    } catch (e) {
+      console.error(e);
+      deleteBtn.disabled = false;
+    }
+  };
 
   let booted = false;
   $loading.subscribe((loading) => { if (!loading && !booted) { booted = true; load(); } });

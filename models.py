@@ -765,6 +765,24 @@ def remove_from_collection(conn, uid, collection_id, paper_id):
     return True
 
 
+def delete_collection(conn, uid, collection_id):
+    """Delete a user's collection and its saved-paper rows. Returns "deleted"
+    on success, "not_found" if it isn't this user's collection, or "default"
+    if it's the protected "Liked Papers" collection (which can't be deleted)."""
+    collection = get_collection(conn, uid, collection_id)
+    if not collection:
+        return "not_found"
+    if collection["is_default"]:
+        return "default"
+    conn.execute(
+        "DELETE FROM collection_papers WHERE collection_id = ?", (collection_id,)
+    )
+    conn.execute(
+        "DELETE FROM collections WHERE id = ? AND uid = ?", (collection_id, uid)
+    )
+    return "deleted"
+
+
 def list_collection_papers(conn, uid, collection_id):
     """A collection's saved papers (feed-item shape), or None if the
     collection doesn't exist / isn't owned by ``uid``."""

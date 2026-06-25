@@ -98,6 +98,18 @@ def get_collection(collection_id):
     return jsonify({"collection": collection, "items": items})
 
 
+@bp.route("/api/collections/<int:collection_id>", methods=["DELETE"])
+@require_auth
+def delete_collection(collection_id):
+    with get_conn() as conn:
+        result = models.delete_collection(conn, g.uid, collection_id)
+    if result == "not_found":
+        return jsonify({"error": "not found"}), 404
+    if result == "default":
+        return jsonify({"error": "the default collection cannot be deleted"}), 403
+    return jsonify({"deleted": True})
+
+
 @bp.route("/api/collections/<int:collection_id>/papers", methods=["POST"])
 @require_auth
 def add_collection_paper(collection_id):

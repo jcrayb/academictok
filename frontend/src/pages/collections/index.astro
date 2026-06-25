@@ -19,6 +19,11 @@ import NavBar from "../../components/NavBar.astro";
           class="min-w-0 flex-1 rounded-lg border border-border bg-card px-2 py-1 text-[0.9rem] text-text outline-none focus:border-accent" />
         <button type="submit" class="primary">Create</button>
       </form>
+      <div class="mb-4 flex items-center gap-2">
+        <button id="select-btn" class="text-[0.9rem] text-muted hover:text-accent !border-0 !bg-transparent" hidden>Select to delete</button>
+        <button id="delete-selected" class="primary" disabled hidden>Delete</button>
+        <button id="cancel-select" class="text-[0.9rem] text-muted hover:text-accent !border-0 !bg-transparent" hidden>Cancel</button>
+      </div>
       <div id="collections-grid" class="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4"></div>
     </div>
   </main>
@@ -26,7 +31,7 @@ import NavBar from "../../components/NavBar.astro";
 
 <script>
   import { $user, $loading } from "../../stores/auth";
-  import { getCollections, createCollection, type Collection } from "../../lib/api";
+  import { getCollections, createCollection, deleteCollection, type Collection } from "../../lib/api";
   import { promptLogin } from "../../lib/loginPrompt";
 
   const signedOutEl = document.getElementById("signed-out")!;
@@ -35,22 +40,97 @@ import NavBar from "../../components/NavBar.astro";
   const collectionsGrid = document.getElementById("collections-grid")!;
   const newCollectionForm = document.getElementById("new-collection-form") as HTMLFormElement;
   const newCollectionName = document.getElementById("new-collection-name") as HTMLInputElement;
+  const selectBtn = document.getElementById("select-btn") as HTMLButtonElement;
+  const deleteSelectedBtn = document.getElementById("delete-selected") as HTMLButtonElement;
+  const cancelSelectBtn = document.getElementById("cancel-select") as HTMLButtonElement;
 
   signedOutSignin.onclick = async () => { await promptLogin("Sign in to see your collections."); };
 
-  function renderCollections(collections: Collection[]) {
+  // Multi-select delete: "Select to delete" turns the grid into a picker where
+  // any number of (non-default) collections can be toggled and deleted at once.
+  let collections: Collection[] = [];
+  let selectionMode = false;
+  const selected = new Set<number>();
+
+  const CARD_CLASS =
+    "relative block rounded-xl border bg-card p-4 no-underline transition-colors duration-150";
+
+  function renderCollections() {
     collectionsGrid.innerHTML = "";
     for (const c of collections) {
-      const el = document.createElement("a");
-      el.href = `/collections/${c.id}`;
-      el.className =
-        "block rounded-xl border border-border bg-card p-4 no-underline transition-colors duration-150 hover:border-accent";
-      el.innerHTML = `
+      const inner = `
         <div class="text-[1rem] font-semibold text-text">${c.is_default ? "❤️ " : ""}${c.name}</div>
         <div class="mt-1 text-[0.82rem] text-muted">${c.paper_count} paper${c.paper_count === 1 ? "" : "s"}</div>`;
-      collectionsGrid.appendChild(el);
+
+      if (!selectionMode) {
+        const a = document.createElement("a");
+        a.href = `/collections/${c.id}`;
+        a.className = `${CARD_CLASS} border-border hover:border-accent`;
+        a.innerHTML = inner;
+        collectionsGrid.appendChild(a);
+        continue;
+      }
+
+      // The default "Liked Papers" collection can't be deleted, so it isn't selectable.
+      if (c.is_default) {
+        const div = document.createElement("div");
+        div.className = `${CARD_CLASS} border-border opacity-50`;
+        div.title = "The Liked Papers collection can't be deleted.";
+        div.innerHTML = inner;
+        collectionsGrid.appendChild(div);
+        continue;
+      }
+
+      const isSel = selected.has(c.id);
+      const div = document.createElement("div");
+      div.className = `${CARD_CLASS} cursor-pointer ${isSel ? "border-accent" : "border-border hover:border-accent"}`;
+      div.innerHTML = `${inner}
+        <span class="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full border text-[0.7rem] leading-none ${isSel ? "border-accent bg-accent text-white" : "border-border text-transparent"}">✓</span>`;
+      div.onclick = () => {
+        if (selected.has(c.id)) selected.delete(c.id);
+        else selected.add(c.id);
+        renderCollections();
+        updateToolbar();
+      };
+      collectionsGrid.appendChild(div);
     }
   }
+
+  function updateToolbar() {
+    const hasDeletable = collections.some((c) => !c.is_default);
+    selectBtn.hidden = selectionMode || !hasDeletable;
+    deleteSelectedBtn.hidden = !selectionMode;
+    cancelSelectBtn.hidden = !selectionMode;
+    deleteSelectedBtn.disabled = selected.size === 0;
+    deleteSelectedBtn.textContent = selected.size ? `Delete (${selected.size})` : "Delete";
+  }
+
+  selectBtn.onclick = () => {
+    selectionMode = true;
+    selected.clear();
+    renderCollections();
+    updateToolbar();
+  };
+
+  cancelSelectBtn.onclick = () => {
+    selectionMode = false;
+    selected.clear();
+    renderCollections();
+    updateToolbar();
+  };
+
+  deleteSelectedBtn.onclick = async () => {
+    if (!selected.size) return;
+    const n = selected.size;
+    if (!confirm(`Delete ${n} collection${n === 1 ? "" : "s"}? This can't be undone.`)) return;
+    deleteSelectedBtn.disabled = true;
+    try {
+      await Promise.all([...selected].map((id) => deleteCollection(id)));
+    } catch (e) { console.error(e); }
+    selectionMode = false;
+    selected.clear();
+    await load();
+  };
 
   async function load() {
     const user = $user.get();
@@ -58,8 +138,9 @@ import NavBar from "../../components/NavBar.astro";
     signedInEl.hidden = !user;
     if (!user) return;
     try {
-      const { collections } = await getCollections();
-      renderCollections(collections);
+      ({ collections } = await getCollections());
+      renderCollections();
+      updateToolbar();
     } catch (e) { console.error(e); }
   }
 
@@ -68,9 +149,10 @@ import NavBar from "../../components/NavBar.astro";
     const name = newCollectionName.value.trim();
     if (!name) return;
     try {
-      const { collections } = await createCollection(name);
+      ({ collections } = await createCollection(name));
       newCollectionName.value = "";
-      renderCollections(collections);
+      renderCollections();
+      updateToolbar();
     } catch (e) { console.error(e); }
   });
 

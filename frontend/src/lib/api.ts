@@ -257,6 +257,14 @@ export async function removeFromCollection(collectionId: number, paperId: number
   });
 }
 
+export async function deleteCollection(collectionId: number) {
+  const { headers, uid } = await authParams();
+  return apiFetch(`/api/collections/${collectionId}?uid=${uid}`, {
+    method: "DELETE",
+    headers,
+  });
+}
+
 // ── Feed ──────────────────────────────────────────────────────────────────────
 
 export interface MixedCursor {
